@@ -7,6 +7,9 @@
 
 import SwiftUI
 import Photos
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// 权限申请页面
 struct OnboardingPermissionRequestView: View {
@@ -312,10 +315,12 @@ struct OnboardingPermissionRequestView: View {
     }
 
     private func openSettings() {
+        #if canImport(UIKit)
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
         if UIApplication.shared.canOpenURL(url) {
             UIApplication.shared.open(url)
         }
+        #endif
     }
 }
 

@@ -216,7 +216,7 @@ struct WelcomeView: View {
             }
 
             // 页码指示器
-            PageIndicator(currentPage: 0, totalPages: 5)
+            PageIndicator(currentPage: 0, totalPages: OnboardingStep.allCases.count)
         }
         .padding(.bottom, 20)
         .opacity(isAnimating ? 1 : 0)

@@ -1,16 +1,16 @@
 import SwiftUI
-import UIKit
 
 /// 滑动交互视图 - 极简卡片设计
 struct SwipeView: View {
     @ObservedObject var viewModel: PhotoSwipeViewModel
+    @Binding var interactionProgress: CGFloat
 
     @Environment(\.colorScheme) private var colorScheme
 
     // 手势状态
     @State private var dragOffset = CGSize.zero
-    @State private var isDragging = false
     @State private var isProcessing = false
+    @State private var swipeObserver: NSObjectProtocol?
 
     // 阈值
     private let threshold: CGFloat = 80
@@ -21,36 +21,49 @@ struct SwipeView: View {
     @AppStorage("swipeRightAlbum") private var swipeRightAlbum: String = ""
     @AppStorage("enableHardDelete") private var enableHardDelete = false
 
-    // 卡片堆叠 - 拍立得风格
-    private let cardOffsetY: CGFloat = 6
-    private let cardScaleStep: CGFloat = 0.02
+    private var swipeProgress: CGFloat {
+        min(abs(dragOffset.width) / 140, 1)
+    }
+
+    private var swipeColor: Color {
+        if dragOffset.width < 0 {
+            return (enableHardDelete || swipeLeftAlbum.isEmpty) ? .swipeDelete : .swipeArchive
+        }
+        if dragOffset.width > 0 {
+            return .swipeKeep
+        }
+        return .clear
+    }
 
     var body: some View {
         ZStack {
-            // 卡片堆叠
+            if swipeProgress > 0.01 {
+                swipeFeedbackGlow
+            }
+
             cardStack
 
-            // 空状态
             if viewModel.allPhotos.isEmpty && !viewModel.isLoading {
                 emptyStateView
             }
         }
         .onAppear {
-            // 加载所有可见卡片的图片
-            for offset in 0...2 {
-                if let photo = photoAt(offset: offset) {
-                    photo.loadImage()
-                }
-            }
-            // 监听按钮触发的滑动
-            NotificationCenter.default.addObserver(forName: .triggerSwipe, object: nil, queue: .main) { notification in
-                if let direction = notification.object as? GestureDirection {
-                    performSwipe(direction)
+            interactionProgress = 0
+            preloadUpcomingPhotos()
+            if swipeObserver == nil {
+                swipeObserver = NotificationCenter.default.addObserver(forName: .triggerSwipe, object: nil, queue: .main) { notification in
+                    if let direction = notification.object as? GestureDirection {
+                        performSwipe(direction)
+                    }
                 }
             }
         }
         .onDisappear {
-            NotificationCenter.default.removeObserver(self, name: .triggerSwipe, object: nil)
+            interactionProgress = 0
+            if let swipeObserver {
+                NotificationCenter.default.removeObserver(swipeObserver)
+                self.swipeObserver = nil
+            }
         }
     }
 
@@ -65,38 +78,19 @@ struct SwipeView: View {
         }
     }
 
+    private func preloadUpcomingPhotos() {
+        for offset in 0...1 {
+            if let photo = photoAt(offset: offset) {
+                photo.loadImage()
+            }
+        }
+    }
+
 
     // MARK: - Card Stack
 
     private var cardStack: some View {
         ZStack {
-            // 第三张卡片（最底层）
-            if let thirdPhoto = photoAt(offset: 2) {
-                PhotoCardView(
-                    photoAsset: thirdPhoto,
-                    offset: .zero,
-                    gestureDirection: .none,
-                    scale: 1.0 - (cardScaleStep * 2),
-                    isTopCard: false
-                )
-                .offset(y: cardOffsetY * 2)
-                .opacity(0.4)
-            }
-
-            // 第二张卡片
-            if let secondPhoto = photoAt(offset: 1) {
-                PhotoCardView(
-                    photoAsset: secondPhoto,
-                    offset: .zero,
-                    gestureDirection: .none,
-                    scale: 1.0 - cardScaleStep,
-                    isTopCard: false
-                )
-                .offset(y: cardOffsetY)
-                .opacity(0.7)
-            }
-
-            // 第一张卡片（当前卡片）
             if let currentPhoto = viewModel.currentPhoto {
                 topCard(photo: currentPhoto)
             } else if viewModel.isLoading {
@@ -113,18 +107,15 @@ struct SwipeView: View {
             PhotoCardView(
                 photoAsset: photo,
                 offset: dragOffset,
-                gestureDirection: currentDirection,
                 scale: 1.0,
                 isTopCard: true
             )
 
             // 方向标签（滑动时显示）
             directionLabels
-
-            // 计数器（左上角）
-            photoCounter
         }
-        .gesture(dragGesture)
+        .contentShape(Rectangle())
+        .highPriorityGesture(dragGesture)
     }
 
     // MARK: - Direction Labels
@@ -135,10 +126,12 @@ struct SwipeView: View {
             if dragOffset.width < 0 {
                 HStack {
                     leftSwipeLabel
-                        .opacity(min(abs(dragOffset.width) / threshold, 1.0))
+                        .opacity(swipeProgress)
+                        .scaleEffect(0.94 + (swipeProgress * 0.06))
+                        .offset(x: 12 - (swipeProgress * 12))
                     Spacer()
                 }
-                .padding(.leading, 32)
+                .padding(.leading, 20)
             }
 
             // 右滑 - 移动到右滑相册
@@ -146,36 +139,31 @@ struct SwipeView: View {
                 HStack {
                     Spacer()
                     rightSwipeLabel
-                        .opacity(min(abs(dragOffset.width) / threshold, 1.0))
+                        .opacity(swipeProgress)
+                        .scaleEffect(0.94 + (swipeProgress * 0.06))
+                        .offset(x: -12 + (swipeProgress * 12))
                 }
-                .padding(.trailing, 32)
+                .padding(.trailing, 20)
             }
         }
     }
 
     private var leftSwipeLabel: some View {
-        let label = enableHardDelete ? "删除" : (swipeLeftAlbum.isEmpty ? "左滑" : swipeLeftAlbum)
-        let color = enableHardDelete ? Color.swipeDelete : Color.swipeArchive
+        let showsDeleteStyle = enableHardDelete || swipeLeftAlbum.isEmpty
+        let label = showsDeleteStyle ? "删除" : swipeLeftAlbum
+        let color = showsDeleteStyle ? Color.swipeDelete : Color.swipeArchive
         return VStack(spacing: 4) {
-            Image(systemName: enableHardDelete ? "trash.fill" : "arrow.left")
+            Image(systemName: showsDeleteStyle ? "trash.fill" : "arrow.left")
                 .font(.system(size: 20, weight: .semibold))
             Text(label)
                 .font(.caption)
                 .fontWeight(.semibold)
         }
         .foregroundColor(.white)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            Capsule()
-                .fill(color.opacity(0.95))
-                .overlay(
-                    Capsule()
-                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                )
-        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .adaptiveLiquidGlass(cornerRadius: 18, tint: color.opacity(0.28))
         .shadow(color: color.opacity(0.4), radius: 8, x: 0, y: 4)
-        .rotationEffect(.degrees(-8))
     }
 
     private var rightSwipeLabel: some View {
@@ -188,42 +176,28 @@ struct SwipeView: View {
                 .fontWeight(.semibold)
         }
         .foregroundColor(.white)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            Capsule()
-                .fill(Color.swipeKeep.opacity(0.95))
-                .overlay(
-                    Capsule()
-                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                )
-        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .adaptiveLiquidGlass(cornerRadius: 18, tint: Color.swipeKeep.opacity(0.28))
         .shadow(color: Color.swipeKeep.opacity(0.4), radius: 8, x: 0, y: 4)
-        .rotationEffect(.degrees(8))
     }
 
-    // MARK: - Photo Counter
-
-    private var photoCounter: some View {
-        VStack {
-            HStack {
-                Text("\(viewModel.currentIndex + 1)/\(viewModel.allPhotos.count)")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        Capsule()
-                            .fill(Color.black.opacity(0.4))
-                    )
-
-                Spacer()
-            }
-            .padding(.leading, 12)
-            .padding(.top, 12)
-
-            Spacer()
+    private var swipeFeedbackGlow: some View {
+        GeometryReader { geometry in
+            Circle()
+                .fill(swipeColor.opacity(0.22))
+                .frame(width: geometry.size.width * 0.62, height: geometry.size.width * 0.62)
+                .blur(radius: 40)
+                .offset(
+                    x: dragOffset.width < 0
+                        ? (-geometry.size.width * 0.32)
+                        : (geometry.size.width * 0.32),
+                    y: -geometry.size.height * 0.02
+                )
+                .opacity(swipeProgress)
+                .animation(.easeOut(duration: 0.12), value: swipeProgress)
         }
+        .allowsHitTesting(false)
     }
 
     // MARK: - Loading Card
@@ -283,7 +257,6 @@ struct SwipeView: View {
         DragGesture(minimumDistance: 10)
             .onChanged { value in
                 guard !isProcessing else { return }
-                isDragging = true
 
                 // 添加阻力效果
                 let resistance: CGFloat = 0.9
@@ -296,10 +269,10 @@ struct SwipeView: View {
                 if abs(dragOffset.width) > maxOffset {
                     dragOffset.width = maxOffset * (dragOffset.width > 0 ? 1 : -1)
                 }
+
+                interactionProgress = swipeProgress
             }
             .onEnded { value in
-                isDragging = false
-
                 let horizontal = value.translation.width
                 let velocity = value.predictedEndLocation.x - value.location.x
 
@@ -313,23 +286,15 @@ struct SwipeView: View {
                         performSwipeAction(.right)
                     }
                 } else {
-                    // 回弹 - 无动画直接复位
-                    dragOffset = .zero
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                        dragOffset = .zero
+                        interactionProgress = 0
+                    }
                 }
             }
     }
 
     // MARK: - Helpers
-
-    /// 当前滑动方向
-    private var currentDirection: GestureDirection {
-        if dragOffset.width < -threshold / 2 {
-            return .left
-        } else if dragOffset.width > threshold / 2 {
-            return .right
-        }
-        return .none
-    }
 
     /// 获取指定偏移位置的图片
     private func photoAt(offset: Int) -> PhotoAsset? {
@@ -359,34 +324,34 @@ struct SwipeView: View {
             HapticService.shared.swipeKeep()
         }
 
-        // 直接执行业务逻辑，无动画
-        switch action {
-        case .left:
-            if enableHardDelete {
-                viewModel.handleSwipe(.left)
-            } else if !swipeLeftAlbum.isEmpty {
-                viewModel.moveToAlbum(swipeLeftAlbum)
-            } else {
-                viewModel.handleSwipe(.left)
+        Task { @MainActor in
+            let exitX = action == .left ? -maxOffset * 2.0 : maxOffset * 2.0
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                dragOffset = CGSize(width: exitX, height: -16)
+                interactionProgress = 1
             }
-        case .right:
-            if !swipeRightAlbum.isEmpty {
-                viewModel.moveToAlbum(swipeRightAlbum)
-            } else {
-                viewModel.handleSwipe(.right)
-            }
-        }
-        
-        // 重置状态
-        dragOffset = .zero
-        isProcessing = false
 
-        // 预加载新可见卡片的图片
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            for offset in 0...2 {
-                if let photo = photoAt(offset: offset) {
-                    photo.loadImage()
-                }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+
+            let direction: GestureDirection = action == .left ? .left : .right
+            await viewModel.performSwipe(
+                direction,
+                leftSwipeAlbum: swipeLeftAlbum,
+                rightSwipeAlbum: swipeRightAlbum,
+                enableHardDelete: enableHardDelete
+            )
+
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                dragOffset = .zero
+                interactionProgress = 0
+            }
+
+            isProcessing = false
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                preloadUpcomingPhotos()
             }
         }
     }

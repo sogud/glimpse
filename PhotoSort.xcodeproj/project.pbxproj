@@ -6,9 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		4CB735792F25129B00438EA1 /* PhotoSort.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoSort.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -64,7 +61,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				4CB7357B2F25129B00438EA1 /* PhotoSort */,
+				4CB7357B2F25129B00438EA1 /* Sources */,
 			);
 			name = PhotoSort;
 			packageProductDependencies = (

@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// 主应用入口视图
 struct ContentView: View {
@@ -13,14 +16,14 @@ struct ContentView: View {
     @EnvironmentObject private var onboardingManager: OnboardingManager
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     // 状态管理
     @State private var showingPermissionAlert = false
-    @State private var showingAlbumPicker = false
     @State private var showingErrorAlert = false
     @State private var showingSettings = false
-    @State private var showingHelp = false
     @State private var showingAlbumSetup = false
+    @State private var swipeInteractionProgress: CGFloat = 0
 
     // 用户设置
     @AppStorage("swipeLeftAlbum") private var swipeLeftAlbum: String = ""
@@ -31,23 +34,13 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                // 胶片相机风格背景 - 根据亮暗模式适配
                 cameraBackground
                     .ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    // 顶部：照片信息栏（胶片风格）
-                    if viewModel.authorizationStatus == .authorized || viewModel.authorizationStatus == .limited {
-                        topInfoBar
-                    }
+                mainContent
 
-                    // 主要的滑动区域
-                    mainContent
-
-                    // 底部：胶片相机风格控制栏
-                    if viewModel.authorizationStatus == .authorized || viewModel.authorizationStatus == .limited {
-                        bottomControlBar
-                    }
+                if viewModel.authorizationStatus == .authorized || viewModel.authorizationStatus == .limited {
+                    overlayChrome
                 }
             }
             .navigationTitle("")
@@ -69,9 +62,6 @@ struct ContentView: View {
             } message: {
                 Text(viewModel.errorMessage ?? "发生未知错误")
             }
-            .sheet(isPresented: $showingAlbumPicker) {
-                AlbumPickerView(viewModel: viewModel)
-            }
             .sheet(isPresented: $viewModel.showSourceAlbumPicker) {
                 SourceAlbumPickerView(viewModel: viewModel)
             }
@@ -79,15 +69,16 @@ struct ContentView: View {
                 SettingsView()
                     .environmentObject(onboardingManager)
             }
-            .sheet(isPresented: $showingHelp) {
-                HelpSheet()
-            }
             .sheet(isPresented: $showingAlbumSetup) {
                 AlbumSetupView()
             }
             .onAppear {
-                handleAuthorizationStatus()
+                refreshAuthorizationStatus()
                 checkAlbumSetupNeeded()
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .active else { return }
+                refreshAuthorizationStatus()
             }
             .onReceive(NotificationCenter.default.publisher(for: .photosReset)) { _ in
                 Task {
@@ -101,100 +92,165 @@ struct ContentView: View {
                     showingErrorAlert = true
                 }
             }
-            .onChange(of: viewModel.showAlbumPicker) {
-                if viewModel.showAlbumPicker {
-                    showingAlbumPicker = true
-                    viewModel.showAlbumPicker = false
-                }
-            }
         }
     }
 
     // MARK: - Background
 
     private var cameraBackground: some View {
-        Group {
+        ZStack {
             if colorScheme == .dark {
-                // 暗模式：纯黑
-                Color.black
+                LinearGradient(
+                    colors: [
+                        Color.black,
+                        Color(red: 0.05, green: 0.09, blue: 0.13),
+                        Color.black
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             } else {
-                // 亮模式：米白色（类似拍立得背景）
-                Color(red: 0.95, green: 0.95, blue: 0.93)
+                LinearGradient.background
             }
+
+            Circle()
+                .fill(Color(red: 0.72, green: 0.89, blue: 1.0).opacity(colorScheme == .dark ? 0.12 : 0.3))
+                .frame(width: 320, height: 320)
+                .blur(radius: 50)
+                .offset(x: -130, y: -220)
+
+            Circle()
+                .fill(Color(red: 0.72, green: 1.0, blue: 0.93).opacity(colorScheme == .dark ? 0.08 : 0.22))
+                .frame(width: 360, height: 360)
+                .blur(radius: 70)
+                .offset(x: 150, y: 260)
         }
+    }
+
+    private var overlayChrome: some View {
+        VStack(spacing: 0) {
+            topInfoBar
+
+            Spacer(minLength: 0)
+
+            bottomControlBar
+        }
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+        .animation(.spring(response: 0.28, dampingFraction: 0.88), value: swipeInteractionProgress)
+    }
+
+    private var currentPhotoDisplayIndex: Int {
+        viewModel.allPhotos.isEmpty ? 0 : viewModel.currentIndex + 1
+    }
+
+    private var topChromeOpacity: Double {
+        1 - Double(min(swipeInteractionProgress, 1)) * 0.18
+    }
+
+    private var topChromeScale: CGFloat {
+        1 - (min(swipeInteractionProgress, 1) * 0.02)
+    }
+
+    private var topChromeOffset: CGFloat {
+        -min(swipeInteractionProgress, 1) * 6
+    }
+
+    private var bottomChromeOpacity: Double {
+        1 - Double(min(swipeInteractionProgress, 1)) * 0.28
+    }
+
+    private var bottomChromeScale: CGFloat {
+        1 - (min(swipeInteractionProgress, 1) * 0.03)
+    }
+
+    private var bottomChromeOffset: CGFloat {
+        min(swipeInteractionProgress, 1) * 8
     }
 
     // MARK: - Subviews
 
     // 顶部信息栏 - 胶片相机风格
     private var topInfoBar: some View {
+        Group {
+            if #available(iOS 26.0, macOS 26.0, *) {
+                GlassEffectContainer(spacing: 12) {
+                    topInfoBarContent
+                }
+            } else {
+                topInfoBarContent
+            }
+        }
+        .padding(.horizontal, 16)
+        .opacity(topChromeOpacity)
+        .scaleEffect(topChromeScale, anchor: .top)
+        .offset(y: topChromeOffset)
+    }
+
+    private var topInfoBarContent: some View {
         HStack {
-            // 相册选择按钮
             Button(action: { viewModel.showSourceAlbumPicker = true }) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: "folder")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 14, weight: .semibold))
                     Text(viewModel.selectedSourceAlbum ?? "所有照片")
                         .font(.system(size: 14, weight: .medium))
                         .lineLimit(1)
                 }
                 .foregroundColor(colorScheme == .dark ? .white : .primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(colorScheme == .dark ? Color.white.opacity(0.1) : Color.black.opacity(0.05))
-                )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .adaptiveLiquidGlass(cornerRadius: 16, tint: .white.opacity(0.06), interactive: true)
             }
+            .disabled(viewModel.isPerformingAction)
 
-            Spacer()
+            Spacer(minLength: 10)
 
-            // 计数器 - 胶片风格（如 1/100）
             HStack(spacing: 4) {
-                Text(String(format: "%03d", viewModel.currentIndex + 1))
-                    .font(.system(size: 20, weight: .bold, design: .monospaced))
-                    .foregroundColor(colorScheme == .dark ? .white : .primary)
-
+                Text(String(format: "%03d", currentPhotoDisplayIndex))
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
                 Text("/")
-                    .font(.system(size: 14, weight: .light))
-                    .foregroundColor(colorScheme == .dark ? .gray : .secondary)
-
+                    .font(.system(size: 13, weight: .light))
+                    .foregroundStyle(.secondary)
                 Text(String(format: "%03d", viewModel.allPhotos.count))
-                    .font(.system(size: 14, weight: .medium, design: .monospaced))
-                    .foregroundColor(colorScheme == .dark ? .gray : .secondary)
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
+            .foregroundStyle(colorScheme == .dark ? .white : .primary)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .adaptiveLiquidGlass(cornerRadius: 16, tint: .white.opacity(0.04))
 
-            Spacer()
+            Spacer(minLength: 10)
 
-            // 设置按钮 - 简化
             Button(action: { showingSettings = true }) {
                 Image(systemName: "gearshape.fill")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(colorScheme == .dark ? .white : .primary)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle()
-                            .fill(colorScheme == .dark ? Color.white.opacity(0.1) : Color.black.opacity(0.05))
-                    )
+                    .frame(width: 40, height: 40)
+                    .adaptiveLiquidGlass(cornerRadius: 20, tint: .white.opacity(0.06), interactive: true)
             }
+            .disabled(viewModel.isPerformingAction)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(colorScheme == .dark ? Color.black : Color(red: 0.95, green: 0.95, blue: 0.93))
     }
 
     @ViewBuilder
     private var mainContent: some View {
         if viewModel.authorizationStatus == .authorized || viewModel.authorizationStatus == .limited {
-            SwipeView(viewModel: viewModel)
-                .padding(.horizontal, 20)
+            SwipeView(viewModel: viewModel, interactionProgress: $swipeInteractionProgress)
+                .padding(.horizontal, 2)
+                .padding(.top, 52)
+                .padding(.bottom, 72)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             permissionRequestView
         }
     }
 
     private var permissionRequestView: some View {
-        VStack(spacing: 32) {
+        let isDenied = viewModel.authorizationStatus == .denied
+
+        return VStack(spacing: 32) {
             Spacer()
 
             // 图标
@@ -209,12 +265,16 @@ struct ContentView: View {
             }
 
             VStack(spacing: 12) {
-                Text("需要相册权限")
+                Text(isDenied ? "请前往设置开启权限" : "需要相册权限")
                     .font(.title2)
                     .fontWeight(.bold)
                     .foregroundColor(.primary)
 
-                Text("为了帮您快速整理照片，\n我们需要访问您的相册。")
+                Text(
+                    isDenied
+                        ? "您已拒绝相册访问权限。\n请在系统设置中允许访问后继续整理。"
+                        : "为了帮您快速整理照片，\n我们需要访问您的相册。"
+                )
                     .font(.body)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -223,23 +283,36 @@ struct ContentView: View {
 
             Spacer()
 
-            // 授予权限按钮
-            Button(action: { showingPermissionAlert = true }) {
-                HStack(spacing: 8) {
-                    Text("授予权限")
-                        .font(.headline)
-                        .fontWeight(.semibold)
+            VStack(spacing: 12) {
+                Button(action: {
+                    if isDenied {
+                        openAppSettings()
+                    } else {
+                        showingPermissionAlert = true
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Text(isDenied ? "打开设置" : "授予权限")
+                            .font(.headline)
+                            .fontWeight(.semibold)
 
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 16, weight: .semibold))
+                        Image(systemName: isDenied ? "gearshape.fill" : "arrow.right")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+                    .background(LinearGradient.brand)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
                 }
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 18)
-                .background(
-                    LinearGradient.brand
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+
+                if isDenied {
+                    Button("重新检查权限") {
+                        refreshAuthorizationStatus()
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                }
             }
             .padding(.horizontal, 32)
             .padding(.bottom, 40)
@@ -249,56 +322,66 @@ struct ContentView: View {
 
     // 底部控制栏 - 胶片相机风格
     private var bottomControlBar: some View {
-        HStack(spacing: 60) {
-            // 左滑按钮（删除/移动到相册A）
-            ActionButton(
+        let canSwipe = viewModel.currentPhoto != nil && !viewModel.isLoading && !viewModel.isPerformingAction
+        let leftSwipeDeletes = enableHardDelete || swipeLeftAlbum.isEmpty
+
+        return bottomControlBarContent(canSwipe: canSwipe, leftSwipeDeletes: leftSwipeDeletes)
+            .padding(.horizontal, 18)
+            .opacity(bottomChromeOpacity)
+            .scaleEffect(bottomChromeScale, anchor: .bottom)
+            .offset(y: bottomChromeOffset)
+    }
+
+    private func bottomControlBarContent(canSwipe: Bool, leftSwipeDeletes: Bool) -> some View {
+        HStack(spacing: 24) {
+            DockActionButton(
                 icon: "xmark",
-                iconColor: enableHardDelete ? .swipeDelete : .swipeArchive,
-                albumName: enableHardDelete ? "删除" : swipeLeftAlbum,
+                iconColor: leftSwipeDeletes
+                    ? Color(red: 0.84, green: 0.38, blue: 0.35)
+                    : Color(red: 0.42, green: 0.56, blue: 0.72),
+                albumName: leftSwipeDeletes ? "删除" : swipeLeftAlbum,
+                isEnabled: canSwipe,
                 action: { triggerSwipe(.left) }
             )
 
-            // 撤销按钮（中间）
             Button(action: {
                 viewModel.undoLastAction()
                 HapticService.shared.medium()
             }) {
-                ZStack {
-                    Circle()
-                        .fill(viewModel.canUndo
-                              ? (colorScheme == .dark ? Color.white.opacity(0.15) : Color.black.opacity(0.08))
-                              : (colorScheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.03)))
-                        .frame(width: 56, height: 56)
-
+                VStack(spacing: 4) {
                     Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundColor(viewModel.canUndo
-                                         ? (colorScheme == .dark ? .white : .primary)
-                                         : .gray)
-                }
-            }
-            .disabled(!viewModel.canUndo)
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 42, height: 42)
+                        .background(
+                            Circle()
+                                .fill((viewModel.canUndo ? Color.primary : Color.secondary).opacity(colorScheme == .dark ? 0.14 : 0.08))
+                        )
 
-            // 右滑按钮（保留/移动到相册B）
-            ActionButton(
+                    Text("撤销")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .foregroundColor(viewModel.canUndo
+                                 ? (colorScheme == .dark ? .white : .primary)
+                                 : .gray)
+                .frame(width: 64)
+            }
+            .buttonStyle(.plain)
+            .buttonStyle(DockPressButtonStyle())
+            .disabled(!viewModel.canUndo || viewModel.isPerformingAction)
+
+            DockActionButton(
                 icon: "checkmark",
-                iconColor: .swipeKeep,
+                iconColor: Color(red: 0.32, green: 0.66, blue: 0.52),
                 albumName: swipeRightAlbum.isEmpty ? "保留" : swipeRightAlbum,
+                isEnabled: canSwipe,
                 action: { triggerSwipe(.right) }
             )
         }
-        .padding(.horizontal, 40)
-        .padding(.vertical, 20)
-        .background(
-            LinearGradient(
-                colors: colorScheme == .dark ?
-                    [Color.black.opacity(0), Color.black.opacity(0.8), Color.black] :
-                    [Color(red: 0.95, green: 0.95, blue: 0.93).opacity(0), Color(red: 0.95, green: 0.95, blue: 0.93).opacity(0.8), Color(red: 0.95, green: 0.95, blue: 0.93)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+        .adaptiveLiquidGlass(cornerRadius: 28, tint: .white.opacity(0.08))
+        .floatingShadow(colorScheme: colorScheme)
     }
 
     private func triggerSwipe(_ direction: GestureDirection) {
@@ -315,6 +398,11 @@ struct ContentView: View {
         }
     }
 
+    private func refreshAuthorizationStatus() {
+        viewModel.checkAuthorizationStatus()
+        handleAuthorizationStatus()
+    }
+
     private func handleAuthorizationStatus() {
         switch viewModel.authorizationStatus {
         case .notDetermined:
@@ -327,158 +415,60 @@ struct ContentView: View {
                     try await viewModel.loadPhotos()
                 } catch {}
             }
-        @unknown default:
-            break
-        }
-    }
-}
-
-// MARK: - Help Sheet
-
-struct HelpSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 32) {
-                // 标题
-                VStack(spacing: 8) {
-                    Text("手势操作")
-                        .font(.title2)
-                        .fontWeight(.bold)
-
-                    Text("像刷卡片一样整理照片")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.top, 20)
-
-                // 操作说明
-                VStack(spacing: 20) {
-                    helpItem(
-                        icon: "arrow.left",
-                        title: "左滑",
-                        description: "移动到左滑目标相册",
-                        color: .swipeDelete
-                    )
-
-                    helpItem(
-                        icon: "arrow.right",
-                        title: "右滑",
-                        description: "移动到右滑目标相册",
-                        color: .swipeKeep
-                    )
-                }
-                .padding(.horizontal, 24)
-
-                // 提示
-                VStack(spacing: 12) {
-                    Label("所有操作可撤销", systemImage: "arrow.uturn.backward")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    Label("点击底部撤销按钮回退", systemImage: "hand.tap")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.top, 20)
-
-                Spacer()
-
-                // 完成按钮
-                Button(action: { dismiss() }) {
-                    Text("知道了")
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(
-                            LinearGradient.brand
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 30)
-            }
         }
     }
 
-    private func helpItem(icon: String, title: String, description: String, color: Color) -> some View {
-        HStack(spacing: 16) {
-            Image(systemName: icon)
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundColor(color)
-                .frame(width: 44, height: 44)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(color.opacity(0.12))
-                )
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-
-                Text(description)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial)
-        )
+    private func openAppSettings() {
+        #if canImport(UIKit)
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        guard UIApplication.shared.canOpenURL(url) else { return }
+        UIApplication.shared.open(url)
+        #endif
     }
 }
 
 // MARK: - Action Button Component
 
-struct ActionButton: View {
+struct DockActionButton: View {
     let icon: String
     let iconColor: Color
     let albumName: String
+    let isEnabled: Bool
     let action: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 8) {
-                ZStack {
-                    // 外圈光晕
-                    Circle()
-                        .fill(iconColor.opacity(0.2))
-                        .frame(width: 72, height: 72)
-                        .blur(radius: 8)
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(iconColor)
+                    .frame(width: 42, height: 42)
+                    .background(
+                        Circle()
+                            .fill(iconColor.opacity(isEnabled ? 0.14 : 0.07))
+                    )
 
-                    // 主按钮
-                    Circle()
-                        .fill(colorScheme == .dark ? Color.white.opacity(0.1) : Color.black.opacity(0.05))
-                        .frame(width: 64, height: 64)
-                        .overlay(
-                            Circle()
-                                .stroke(iconColor.opacity(0.5), lineWidth: 2)
-                        )
-
-                    Image(systemName: icon)
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundColor(iconColor)
-                }
-
-                // 相册名称
                 Text(albumName.isEmpty ? (icon == "xmark" ? "删除" : "保留") : albumName)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.7))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .frame(maxWidth: 80)
+                    .frame(maxWidth: 68)
             }
+            .frame(width: 68)
+            .opacity(isEnabled ? 1 : 0.55)
         }
+        .buttonStyle(.plain)
+        .buttonStyle(DockPressButtonStyle())
+        .disabled(!isEnabled)
+    }
+}
+
+private struct DockPressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.78), value: configuration.isPressed)
     }
 }
 

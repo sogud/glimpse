@@ -21,10 +21,17 @@ struct SourceAlbumPickerView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // 当前选择提示
-                selectedAlbumHeader
-                    .padding()
-                    .background(colorScheme == .dark ? Color.black : Color.white)
+                Group {
+                    if #available(iOS 26.0, macOS 26.0, *) {
+                        GlassEffectContainer(spacing: 16) {
+                            selectedAlbumHeader
+                        }
+                    } else {
+                        selectedAlbumHeader
+                    }
+                }
+                .padding()
+                .background(colorScheme == .dark ? Color.black : Color.clear)
 
                 Divider()
 
@@ -93,10 +100,7 @@ struct SourceAlbumPickerView: View {
             }
         }
         .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(colorScheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.03))
-        )
+        .adaptiveLiquidGlass(cornerRadius: 24, tint: .white.opacity(0.1))
     }
 
     private var allPhotosSection: some View {
@@ -228,18 +232,7 @@ struct SourceAlbumPickerView: View {
     }
 
     private func updatePhotoCount() {
-        Task {
-            do {
-                let assets = try viewModel.service.fetchPhotos(fromAlbum: viewModel.selectedSourceAlbum)
-                await MainActor.run {
-                    photoCount = assets.count
-                }
-            } catch {
-                await MainActor.run {
-                    photoCount = 0
-                }
-            }
-        }
+        photoCount = viewModel.allPhotos.count
     }
 
     private func selectAlbum(_ albumName: String?) {
@@ -262,7 +255,6 @@ struct SourceAlbumPickerView: View {
                     dismiss()
                 }
             } catch {
-                print("加载照片失败: \(error)")
                 await MainActor.run {
                     dismiss()
                 }

@@ -1,6 +1,5 @@
 import Photos
 import SwiftUI
-import Combine
 
 /// 主要的视图模型，协调Service和View之间的交互
 @MainActor
@@ -25,9 +24,6 @@ class PhotoSwipeViewModel: ObservableObject {
     /// 权限状态
     @Published var authorizationStatus: PhotoLibraryService.AuthorizationStatus = .notDetermined
 
-    /// 触发相册选择器的标志
-    @Published var showAlbumPicker = false
-
     /// 当前选择的源相册（nil 表示所有照片）
     @Published var selectedSourceAlbum: String? {
         didSet {
@@ -38,18 +34,32 @@ class PhotoSwipeViewModel: ObservableObject {
     /// 是否显示源相册选择器
     @Published var showSourceAlbumPicker = false
 
+    /// 是否正在执行照片操作
+    @Published private(set) var isPerformingAction = false
+
     // MARK: - Private Properties
 
-    let service = PhotoLibraryService()
-    private var cancellables = Set<AnyCancellable>()
+    private let service = PhotoLibraryService()
 
-    // 用于撤销操作的栈
-    private var undoStack: [(action: String, asset: PHAsset, index: Int)] = []
+    /// 是否可撤销
+    @Published private(set) var canUndo = false
 
-    /// 撤销栈是否为空
-    var canUndo: Bool {
-        !undoStack.isEmpty
+    /// 撤销动作定义
+    private enum UndoAction {
+        case keep
+        case move(albumName: String)
+        case delete
     }
+
+    /// 撤销记录
+    private struct UndoEntry {
+        let action: UndoAction
+        let assetIdentifier: String
+        let index: Int
+    }
+
+    /// 用于撤销操作的栈
+    private var undoStack: [UndoEntry] = []
 
     // MARK: - Initialization
 
@@ -114,6 +124,9 @@ class PhotoSwipeViewModel: ObservableObject {
                 currentPhoto = allPhotos[0]
                 // 预加载第一张图片，使用较大的目标尺寸
                 currentPhoto?.loadImage()
+            } else {
+                currentIndex = 0
+                currentPhoto = nil
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -121,111 +134,109 @@ class PhotoSwipeViewModel: ObservableObject {
         }
     }
 
-    /// 处理滑动手势
-    /// - Parameter direction: 滑动方向
-    func handleSwipe(_ direction: GestureDirection) {
-        guard let currentPhoto = currentPhoto else { return }
+    /// 根据当前配置执行滑动动作
+    func performSwipe(
+        _ direction: GestureDirection,
+        leftSwipeAlbum: String,
+        rightSwipeAlbum: String,
+        enableHardDelete: Bool
+    ) async {
+        guard currentPhoto != nil, !isPerformingAction else { return }
+
+        isPerformingAction = true
+        defer { isPerformingAction = false }
 
         switch direction {
-        case .right:
-            // 保留照片，移动到下一张
-            keepPhoto()
         case .left:
-            // 删除照片
-            deletePhoto(currentPhoto.asset)
-        case .up:
-            // 移动到相册（需要用户选择相册）
-            showAlbumPicker = true
-        case .down:
-            // 跳过/稍后处理
-            skipPhoto()
-        case .none:
+            if enableHardDelete || leftSwipeAlbum.isEmpty {
+                await deleteCurrentPhoto()
+            } else {
+                await moveCurrentPhotoToAlbum(leftSwipeAlbum)
+            }
+        case .right:
+            if rightSwipeAlbum.isEmpty {
+                keepCurrentPhoto()
+            } else {
+                await moveCurrentPhotoToAlbum(rightSwipeAlbum)
+            }
+        default:
             break
         }
     }
 
-    /// 保留当前照片并移动到下一张
-    func keepPhoto() {
-        // 记录为已处理
-        if let currentPhoto = currentPhoto {
-            ProcessedPhotoManager.shared.markAsProcessed(currentPhoto.asset.localIdentifier)
-        }
-        moveToNextPhoto()
+    /// 保留当前照片并从当前队列移除
+    func keepCurrentPhoto() {
+        guard let currentPhoto else { return }
+        pushUndo(
+            action: .keep,
+            assetIdentifier: currentPhoto.asset.localIdentifier,
+            index: currentIndex
+        )
+        removeCurrentPhoto()
     }
 
     /// 删除当前照片
-    func deletePhoto(_ asset: PHAsset) {
-        Task {
-            do {
-                // 保存撤销信息
-                undoStack.append(("delete", asset, currentIndex))
+    func deleteCurrentPhoto() async {
+        guard let currentPhoto else { return }
 
-                let success = try await service.deletePhoto(asset)
-                if success {
-                    removeCurrentPhoto()
-                }
-            } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                }
+        do {
+            let success = try await service.deletePhoto(currentPhoto.asset)
+            if success {
+                // 删除操作无法真正恢复，这里只支持回到当时位置
+                pushUndo(
+                    action: .delete,
+                    assetIdentifier: currentPhoto.asset.localIdentifier,
+                    index: currentIndex
+                )
+                removeCurrentPhoto()
             }
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
-    /// 移动照片到指定相册
-    func movePhotoToAlbum(_ asset: PHAsset, albumName: String) {
-        Task {
-            do {
-                // 保存撤销信息
-                undoStack.append(("move", asset, currentIndex))
+    /// 移动当前照片到指定相册
+    func moveCurrentPhotoToAlbum(_ albumName: String) async {
+        guard let currentPhoto else { return }
 
-                let success = try await service.movePhotoToAlbum(asset, albumName: albumName)
-                if success {
-                    removeCurrentPhoto()
-                }
-            } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                }
+        do {
+            let success = try await service.movePhotoToAlbum(currentPhoto.asset, albumName: albumName)
+            if success {
+                pushUndo(
+                    action: .move(albumName: albumName),
+                    assetIdentifier: currentPhoto.asset.localIdentifier,
+                    index: currentIndex
+                )
+                removeCurrentPhoto()
             }
+        } catch {
+            errorMessage = error.localizedDescription
         }
-    }
-
-    /// 移动当前照片到指定相册（用于设置中配置的相册）
-    func moveToAlbum(_ albumName: String) {
-        guard let currentPhoto = currentPhoto else { return }
-        movePhotoToAlbum(currentPhoto.asset, albumName: albumName)
-    }
-
-    /// 跳过当前照片（移动到下一张）
-    func skipPhoto() {
-        // 记录为已处理
-        if let currentPhoto = currentPhoto {
-            ProcessedPhotoManager.shared.markAsProcessed(currentPhoto.asset.localIdentifier)
-        }
-        moveToNextPhoto()
     }
 
     /// 撤销上一步操作
     func undoLastAction() {
-        guard !undoStack.isEmpty else { return }
+        guard !isPerformingAction, let lastAction = popUndo() else { return }
 
-        let lastAction = undoStack.removeLast()
-
-        // 对于删除和移动操作，我们只需要重新加载照片列表
-        // 因为实际的照片数据可能已经改变，最安全的方式是重新获取
         Task {
+            isPerformingAction = true
+            defer { isPerformingAction = false }
+
             do {
+                switch lastAction.action {
+                case .keep:
+                    ProcessedPhotoManager.shared.removeFromProcessed(lastAction.assetIdentifier)
+                case .move(let albumName):
+                    _ = try await service.removePhotoFromAlbum(withLocalIdentifier: lastAction.assetIdentifier, albumName: albumName)
+                    ProcessedPhotoManager.shared.removeFromProcessed(lastAction.assetIdentifier)
+                case .delete:
+                    errorMessage = "删除操作受系统限制，无法自动恢复原照片"
+                }
+
                 try await loadPhotos()
-                // 尝试恢复到之前的位置
-                if lastAction.index < allPhotos.count {
-                    currentIndex = lastAction.index
-                    currentPhoto = allPhotos[currentIndex]
-                }
+                restorePhotoPosition(with: lastAction.assetIdentifier, fallbackIndex: lastAction.index)
             } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                }
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -236,19 +247,6 @@ class PhotoSwipeViewModel: ObservableObject {
     }
 
     // MARK: - Private Methods
-
-    /// 移动到下一张照片
-    private func moveToNextPhoto() {
-        guard currentIndex < allPhotos.count - 1 else {
-            // 如果是最后一张，可以考虑循环到第一张或者停止
-            // 这里选择停止在最后一张
-            return
-        }
-
-        currentIndex += 1
-        currentPhoto = allPhotos[currentIndex]
-        currentPhoto?.loadImage()
-    }
 
     /// 移除当前照片（从本地列表中）
     private func removeCurrentPhoto() {
@@ -273,6 +271,38 @@ class PhotoSwipeViewModel: ObservableObject {
         }
 
         // 预加载当前照片
+        currentPhoto?.loadImage()
+    }
+
+    /// 入栈撤销记录
+    private func pushUndo(action: UndoAction, assetIdentifier: String, index: Int) {
+        undoStack.append(UndoEntry(action: action, assetIdentifier: assetIdentifier, index: index))
+        canUndo = !undoStack.isEmpty
+    }
+
+    /// 出栈撤销记录
+    private func popUndo() -> UndoEntry? {
+        guard !undoStack.isEmpty else { return nil }
+        let entry = undoStack.removeLast()
+        canUndo = !undoStack.isEmpty
+        return entry
+    }
+
+    /// 尝试恢复到指定照片或索引
+    private func restorePhotoPosition(with assetIdentifier: String, fallbackIndex: Int) {
+        guard !allPhotos.isEmpty else {
+            currentIndex = 0
+            currentPhoto = nil
+            return
+        }
+
+        if let matchedIndex = allPhotos.firstIndex(where: { $0.asset.localIdentifier == assetIdentifier }) {
+            currentIndex = matchedIndex
+        } else {
+            currentIndex = min(max(0, fallbackIndex), allPhotos.count - 1)
+        }
+
+        currentPhoto = allPhotos[currentIndex]
         currentPhoto?.loadImage()
     }
 }

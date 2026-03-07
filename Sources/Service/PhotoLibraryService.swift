@@ -261,6 +261,54 @@ class PhotoLibraryService {
         }
     }
 
+    /// 从指定相册移除照片（用于撤销 move 操作）
+    /// - Parameters:
+    ///   - localIdentifier: 照片 localIdentifier
+    ///   - albumName: 相册名
+    /// - Returns: 操作是否成功
+    /// - Throws: PhotoLibraryError
+    func removePhotoFromAlbum(withLocalIdentifier localIdentifier: String, albumName: String) async throws -> Bool {
+        // 检查权限
+        guard currentAuthorizationStatus() == .authorized || currentAuthorizationStatus() == .limited else {
+            throw PhotoLibraryError.insufficientPermission
+        }
+
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+        guard let asset = fetchResult.firstObject else {
+            // 资产已经不存在，视为已完成
+            return true
+        }
+
+        let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
+        var targetCollection: PHAssetCollection?
+        collections.enumerateObjects { collection, _, stop in
+            if collection.localizedTitle == albumName {
+                targetCollection = collection
+                stop.pointee = true
+            }
+        }
+
+        guard let targetCollection else {
+            // 相册不存在，视为无需回滚
+            return true
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            PHPhotoLibrary.shared().performChanges({
+                let request = PHAssetCollectionChangeRequest(for: targetCollection)
+                request?.removeAssets([asset] as NSArray)
+            }) { success, error in
+                if success {
+                    continuation.resume(returning: true)
+                } else if let error {
+                    continuation.resume(throwing: PhotoLibraryError.albumCreationFailed(error.localizedDescription))
+                } else {
+                    continuation.resume(throwing: PhotoLibraryError.albumCreationFailed("Unknown error"))
+                }
+            }
+        }
+    }
+
 }
 
 // MARK: - 错误定义

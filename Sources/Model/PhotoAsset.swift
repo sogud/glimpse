@@ -1,51 +1,113 @@
 import Photos
 import SwiftUI
-import Combine
+#if canImport(UIKit)
+import UIKit
+typealias PlatformImage = UIImage
+#elseif canImport(AppKit)
+import AppKit
+typealias PlatformImage = NSImage
+#endif
 
 /// PhotoAsset包装类，用于在SwiftUI中使用PHAsset
 /// 由于PHAsset不是ObservableObject，我们需要创建一个包装器
 class PhotoAsset: ObservableObject, Identifiable {
-    let id = UUID()
+    private static let imageManager = PHCachingImageManager()
+
+    let id: String
     let asset: PHAsset
 
     // 缓存的图片数据
-    @Published var image: UIImage?
+    @Published var image: PlatformImage?
     @Published var isLoading = false
 
-    private var cancellables = Set<AnyCancellable>()
+    private var requestID: PHImageRequestID = PHInvalidImageRequestID
+    private var requestedTargetSize: CGSize = .zero
+    private var loadedTargetSize: CGSize = .zero
 
     init(asset: PHAsset) {
         self.asset = asset
+        self.id = asset.localIdentifier
     }
 
     /// 加载图片
     /// - Parameters:
-    ///   - targetSize: 目标尺寸，默认使用较大尺寸以保持清晰度
+    ///   - targetSize: 目标尺寸，默认使用当前设备显示尺寸
     ///   - contentMode: 内容模式，默认使用aspectFit保持原图比例
-    func loadImage(targetSize: CGSize = CGSize(width: 1200, height: 1200),
-                  contentMode: PHImageContentMode = .aspectFit) {
-        guard image == nil else { return }
+    func loadImage(
+        targetSize: CGSize = PhotoAsset.defaultTargetSize,
+        contentMode: PHImageContentMode = .aspectFit
+    ) {
+        let normalizedTargetSize = Self.normalizedTargetSize(targetSize)
+        guard shouldRequestImage(for: normalizedTargetSize) else { return }
 
         isLoading = true
 
-        // 使用PHImageManager异步加载图片
         let options = PHImageRequestOptions()
         options.isSynchronous = false
-        options.deliveryMode = .highQualityFormat
-        // 使用fast模式避免强制缩放，保持原图质量
+        options.deliveryMode = .opportunistic
         options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
 
-        PHImageManager.default().requestImage(
+        if requestID != PHInvalidImageRequestID {
+            Self.imageManager.cancelImageRequest(requestID)
+        }
+
+        requestedTargetSize = normalizedTargetSize
+
+        requestID = Self.imageManager.requestImage(
             for: asset,
-            targetSize: targetSize,
+            targetSize: normalizedTargetSize,
             contentMode: contentMode,
             options: options
-        ) { [weak self] image, _ in
+        ) { [weak self] image, info in
+            let isCancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+            if isCancelled { return }
+
+            let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+
             DispatchQueue.main.async {
-                self?.image = image
-                self?.isLoading = false
+                if let image {
+                    self?.image = image
+                }
+
+                guard let self else { return }
+                if !isDegraded {
+                    self.loadedTargetSize = normalizedTargetSize
+                    self.isLoading = false
+                    self.requestID = PHInvalidImageRequestID
+                }
             }
         }
+    }
+
+    private func shouldRequestImage(for targetSize: CGSize) -> Bool {
+        if isLoading {
+            return targetSize.width > requestedTargetSize.width || targetSize.height > requestedTargetSize.height
+        }
+
+        guard image != nil else { return true }
+
+        // 仅在需要明显更高分辨率时才重新请求，避免轻微布局变化导致重复解码。
+        return targetSize.width > loadedTargetSize.width * 1.2 || targetSize.height > loadedTargetSize.height * 1.2
+    }
+
+    private static var defaultTargetSize: CGSize {
+        #if canImport(UIKit)
+        let scale = UIScreen.main.scale
+        let bounds = UIScreen.main.bounds
+        return normalizedTargetSize(
+            CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        )
+        #elseif canImport(AppKit)
+        return normalizedTargetSize(CGSize(width: 1440, height: 1440))
+        #endif
+    }
+
+    private static func normalizedTargetSize(_ size: CGSize) -> CGSize {
+        let maxDimension: CGFloat = 1800
+        let width = min(max(1, size.width.rounded(.up)), maxDimension)
+        let height = min(max(1, size.height.rounded(.up)), maxDimension)
+        return CGSize(width: width, height: height)
     }
 
     /// 创建日期
@@ -81,6 +143,8 @@ class PhotoAsset: ObservableObject, Identifiable {
 
     /// 取消所有正在进行的请求
     deinit {
-        cancellables.removeAll()
+        if requestID != PHInvalidImageRequestID {
+            Self.imageManager.cancelImageRequest(requestID)
+        }
     }
 }

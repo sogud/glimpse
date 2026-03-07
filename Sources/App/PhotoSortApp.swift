@@ -7,10 +7,15 @@
 
 import SwiftUI
 import Photos
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @main
 struct PhotoSortApp: App {
+    #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    #endif
     
     var body: some Scene {
         WindowGroup {
@@ -37,6 +42,7 @@ struct RootView: View {
 }
 
 /// App 代理
+#if canImport(UIKit)
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         // 配置外观
@@ -57,3 +63,4 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         UINavigationBar.appearance().scrollEdgeAppearance = appearance
     }
 }
+#endif

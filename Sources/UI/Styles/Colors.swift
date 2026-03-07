@@ -152,10 +152,10 @@ extension LinearGradient {
     /// 背景渐变 - 柔和装饰
     static let background = LinearGradient(
         colors: [
-            Color.backgroundPrimary,
-            Color.brandPrimary.opacity(0.02),
-            Color.purple.opacity(0.02),
-            Color.backgroundPrimary
+            Color(red: 0.98, green: 0.99, blue: 1.0),
+            Color(red: 0.86, green: 0.94, blue: 1.0).opacity(0.5),
+            Color(red: 0.86, green: 0.98, blue: 0.96).opacity(0.42),
+            Color(red: 0.99, green: 1.0, blue: 1.0)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
@@ -254,5 +254,106 @@ extension View {
     /// 应用玻璃拟态效果
     func glassmorphism(cornerRadius: CGFloat = 24, blurRadius: CGFloat = 20) -> some View {
         modifier(GlassmorphismModifier(cornerRadius: cornerRadius, blurRadius: blurRadius))
+    }
+
+    /// 液态玻璃风格面板（mac/iOS 通用回退实现）
+    func liquidGlassPanel(cornerRadius: CGFloat = 20) -> some View {
+        modifier(LiquidGlassPanelModifier(cornerRadius: cornerRadius))
+    }
+
+    /// 原生液态玻璃外观，低系统版本回退到 material。
+    func adaptiveLiquidGlass(
+        cornerRadius: CGFloat = 20,
+        tint: Color = .white.opacity(0.08),
+        interactive: Bool = false
+    ) -> some View {
+        modifier(
+            AdaptiveLiquidGlassModifier(
+                cornerRadius: cornerRadius,
+                tint: tint,
+                interactive: interactive
+            )
+        )
+    }
+}
+
+struct LiquidGlassPanelModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var cornerRadius: CGFloat = 20
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: colorScheme == .dark
+                                        ? [Color.white.opacity(0.14), Color.white.opacity(0.04)]
+                                        : [Color.white.opacity(0.45), Color.white.opacity(0.1)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(colorScheme == .dark ? 0.18 : 0.3), lineWidth: 1)
+                    )
+            )
+    }
+}
+
+private struct AdaptiveLiquidGlassModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let cornerRadius: CGFloat
+    let tint: Color
+    let interactive: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            if interactive {
+                content
+                    .glassEffect(
+                        .regular
+                            .tint(tint)
+                            .interactive(),
+                        in: .rect(cornerRadius: cornerRadius)
+                    )
+            } else {
+                content
+                    .glassEffect(
+                        .regular.tint(tint),
+                        in: .rect(cornerRadius: cornerRadius)
+                    )
+            }
+        } else {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: colorScheme == .dark
+                                            ? [Color.white.opacity(0.12), Color.white.opacity(0.03)]
+                                            : [Color.white.opacity(0.42), Color.white.opacity(0.08)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .stroke(Color.white.opacity(colorScheme == .dark ? 0.16 : 0.3), lineWidth: 1)
+                        )
+                )
+        }
     }
 }

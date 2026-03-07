@@ -2,17 +2,21 @@
 //  InlineVideoPlayer.swift
 //  PhotoSwipeCleaner
 //
-//  卡片内嵌视频播放器 - 支持手势穿透
+//  卡片内嵌视频播放器 - 支持多平台
 //
 
 import SwiftUI
 import AVKit
 import Photos
 
+#if canImport(UIKit)
+import UIKit
+
 /// 使用 UIViewRepresentable 实现真正的手势穿透
 struct InlineVideoPlayer: UIViewRepresentable {
     let asset: PHAsset
     @Binding var isPlaying: Bool
+    @Binding var isLoading: Bool
 
     func makeUIView(context: Context) -> VideoPlayerView {
         let view = VideoPlayerView()
@@ -23,7 +27,6 @@ struct InlineVideoPlayer: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: VideoPlayerView, context: Context) {
-        // 同步播放状态
         if isPlaying {
             uiView.play()
         } else {
@@ -38,6 +41,7 @@ struct InlineVideoPlayer: UIViewRepresentable {
     class Coordinator: NSObject {
         var parent: InlineVideoPlayer
         weak var view: VideoPlayerView?
+        private var requestID: PHImageRequestID = PHInvalidImageRequestID
 
         init(_ parent: InlineVideoPlayer) {
             self.parent = parent
@@ -49,13 +53,39 @@ struct InlineVideoPlayer: UIViewRepresentable {
             options.isNetworkAccessAllowed = true
             options.deliveryMode = .highQualityFormat
 
-            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { [weak self] avAsset, _, info in
+            DispatchQueue.main.async {
+                self.parent.isLoading = true
+            }
+
+            if requestID != PHInvalidImageRequestID {
+                PHImageManager.default().cancelImageRequest(requestID)
+            }
+
+            requestID = PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { [weak self] avAsset, _, _ in
                 DispatchQueue.main.async {
-                    guard let avAsset = avAsset else {
+                    guard let self else { return }
+                    self.requestID = PHInvalidImageRequestID
+
+                    guard let avAsset else {
+                        self.parent.isLoading = false
+                        self.parent.isPlaying = false
                         return
                     }
-                    self?.view?.setAsset(avAsset)
+
+                    guard self.parent.isPlaying else {
+                        self.parent.isLoading = false
+                        return
+                    }
+
+                    self.view?.setAsset(avAsset)
+                    self.parent.isLoading = false
                 }
+            }
+        }
+
+        deinit {
+            if requestID != PHInvalidImageRequestID {
+                PHImageManager.default().cancelImageRequest(requestID)
             }
         }
     }
@@ -68,7 +98,6 @@ class VideoPlayerView: UIView {
     private var playerItem: AVPlayerItem?
     weak var delegate: InlineVideoPlayer.Coordinator?
 
-    // 播放控制按钮
     private let playButton: UIButton = {
         let btn = UIButton(type: .system)
         btn.setImage(UIImage(systemName: "play.circle.fill"), for: .normal)
@@ -91,17 +120,13 @@ class VideoPlayerView: UIView {
     private func setupView() {
         backgroundColor = .black
 
-        // 设置播放器层
         let layer = AVPlayerLayer()
         layer.videoGravity = .resizeAspect
         self.playerLayer = layer
         self.layer.addSublayer(layer)
 
-        // 添加播放按钮
         addSubview(playButton)
         playButton.addTarget(self, action: #selector(togglePlay), for: .touchUpInside)
-
-        // 关键：禁用所有手势识别器，确保滑动可以穿透到父视图
         isUserInteractionEnabled = true
     }
 
@@ -109,7 +134,6 @@ class VideoPlayerView: UIView {
         super.layoutSubviews()
         playerLayer?.frame = bounds
 
-        // 播放按钮居中
         let buttonSize: CGFloat = 60
         playButton.frame = CGRect(
             x: (bounds.width - buttonSize) / 2,
@@ -120,25 +144,19 @@ class VideoPlayerView: UIView {
         playButton.layer.cornerRadius = buttonSize / 2
     }
 
-    /// 关键：重写 hitTest，让滑动事件穿透到父视图
+    /// 让非按钮区域的事件穿透，避免阻断父层滑动
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let result = super.hitTest(point, with: event)
-
-        // 如果点击的是播放按钮，正常响应
         if result == playButton {
             return playButton
         }
-
-        // 其他区域返回 nil，让事件穿透到父视图
         return nil
     }
 
     func setAsset(_ asset: AVAsset) {
-        // 清理旧的
         player?.pause()
         NotificationCenter.default.removeObserver(self)
 
-        // 创建新的
         let item = AVPlayerItem(asset: asset)
         self.playerItem = item
 
@@ -146,7 +164,6 @@ class VideoPlayerView: UIView {
         self.player = player
         playerLayer?.player = player
 
-        // 监听播放结束
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(playerDidFinishPlaying),
@@ -154,7 +171,6 @@ class VideoPlayerView: UIView {
             object: item
         )
 
-        // 自动播放
         player.play()
         playButton.isHidden = true
     }
@@ -170,8 +186,7 @@ class VideoPlayerView: UIView {
     }
 
     @objc private func togglePlay() {
-        guard let player = player else { return }
-
+        guard let player else { return }
         if player.rate > 0 {
             pause()
         } else {
@@ -190,3 +205,65 @@ class VideoPlayerView: UIView {
         player = nil
     }
 }
+
+#else
+
+/// 非 UIKit 平台回退实现：使用系统 VideoPlayer
+struct InlineVideoPlayer: View {
+    let asset: PHAsset
+    @Binding var isPlaying: Bool
+    @Binding var isLoading: Bool
+
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        Group {
+            if let player {
+                VideoPlayer(player: player)
+                    .onChange(of: isPlaying) { _, newValue in
+                        if newValue {
+                            player.play()
+                        } else {
+                            player.pause()
+                        }
+                    }
+            } else {
+                ProgressView()
+                    .onAppear {
+                        isLoading = true
+                        loadVideo()
+                    }
+            }
+        }
+    }
+
+    private func loadVideo() {
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+
+        PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
+            DispatchQueue.main.async {
+                guard let avAsset else {
+                    isLoading = false
+                    isPlaying = false
+                    return
+                }
+
+                guard isPlaying else {
+                    isLoading = false
+                    return
+                }
+
+                let player = AVPlayer(playerItem: AVPlayerItem(asset: avAsset))
+                self.player = player
+                isLoading = false
+                if isPlaying {
+                    player.play()
+                }
+            }
+        }
+    }
+}
+
+#endif

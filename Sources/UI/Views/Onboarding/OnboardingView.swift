@@ -63,9 +63,6 @@ struct OnboardingView: View {
         case .albumSetup:
             OnboardingAlbumSetupView()
 
-        case .analysis:
-            AnalysisLoadingView()
-
         case .complete:
             completionView
         }

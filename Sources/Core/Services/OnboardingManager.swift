@@ -14,7 +14,6 @@ enum OnboardingStep: Int, CaseIterable {
     case tutorial
     case permission
     case albumSetup
-    case analysis
     case complete
 
     var title: String {
@@ -27,8 +26,6 @@ enum OnboardingStep: Int, CaseIterable {
             return "权限申请"
         case .albumSetup:
             return "相册设置"
-        case .analysis:
-            return "智能分析"
         case .complete:
             return "准备就绪"
         }
@@ -57,12 +54,6 @@ class OnboardingManager: ObservableObject {
     
     /// 是否正在显示引导
     @Published var isOnboarding: Bool = false
-    
-    /// 分析进度 (0.0 - 1.0)
-    @Published var analysisProgress: Double = 0.0
-    
-    /// 分析发现的照片统计
-    @Published var analysisResults: AnalysisResults?
     
     /// 教程中手势完成情况
     @Published var completedGestures: Set<GestureDirection> = []
@@ -100,8 +91,6 @@ class OnboardingManager: ObservableObject {
         currentStep = .welcome
         isOnboarding = true
         completedGestures.removeAll()
-        analysisProgress = 0.0
-        analysisResults = nil
     }
     
     /// 进入下一步
@@ -162,50 +151,9 @@ class OnboardingManager: ObservableObject {
         HapticService.shared.success()
     }
     
-    /// 执行智能分析
-    func performAnalysis() async {
-        analysisProgress = 0.0
-        
-        // 模拟分析进度
-        let totalSteps = 5
-        for step in 1...totalSteps {
-            try? await Task.sleep(nanoseconds: 600_000_000) // 0.6秒
-            
-            await MainActor.run {
-                withAnimation(.easeInOut) {
-                    analysisProgress = Double(step) / Double(totalSteps)
-                }
-            }
-        }
-        
-        // 获取实际照片统计
-        await MainActor.run {
-            analysisResults = AnalysisResults(
-                totalPhotos: 0, // 实际从 PhotoLibraryService 获取
-                screenshots: Int.random(in: 20...100),
-                similarGroups: Int.random(in: 5...20),
-                duplicates: Int.random(in: 10...50),
-                largeFiles: Int.random(in: 5...30)
-            )
-        }
-    }
-    
     // MARK: - Private
     
     private enum Keys {
         static let onboardingCompleted = "onboarding_completed"
-    }
-}
-
-/// 分析结果数据
-struct AnalysisResults {
-    let totalPhotos: Int
-    let screenshots: Int
-    let similarGroups: Int
-    let duplicates: Int
-    let largeFiles: Int
-    
-    var totalOptimizable: Int {
-        screenshots + duplicates + largeFiles
     }
 }
