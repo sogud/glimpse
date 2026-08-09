@@ -10,42 +10,23 @@ import SwiftUI
 /// 新手引导主视图
 struct OnboardingView: View {
     @EnvironmentObject private var onboardingManager: OnboardingManager
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
-            // 背景
-            backgroundView
-
-            // 根据当前步骤显示不同内容
-            contentView
-        }
-        .animation(.easeInOut(duration: 0.3), value: onboardingManager.currentStep)
-    }
-
-    // MARK: - Subviews
-
-    private var backgroundView: some View {
-        ZStack {
-            // 渐变背景 - 柔和装饰
-            LinearGradient.background
+            PhotoSortAmbientBackground()
                 .ignoresSafeArea()
 
-            // 装饰性背景元素 - 更柔和
-            GeometryReader { geometry in
-                Circle()
-                    .fill(Color.brandPrimary.opacity(0.03))
-                    .frame(width: 350, height: 350)
-                    .offset(x: -120, y: -100)
-                    .blur(radius: 60)
+            VStack(spacing: 20) {
+                progressChrome
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
 
-                Circle()
-                    .fill(Color.purple.opacity(0.02))
-                    .frame(width: 400, height: 400)
-                    .offset(x: geometry.size.width - 150, y: geometry.size.height - 200)
-                    .blur(radius: 60)
+                contentView
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: onboardingManager.currentStep)
     }
 
     @ViewBuilder
@@ -54,85 +35,124 @@ struct OnboardingView: View {
         case .welcome:
             WelcomeView()
 
-        case .tutorial:
-            GestureTutorialView()
-
         case .permission:
             OnboardingPermissionRequestView()
-
-        case .albumSetup:
-            OnboardingAlbumSetupView()
 
         case .complete:
             completionView
         }
     }
 
+    private var progressChrome: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(currentStepTitle)
+                    .font(.headline)
+
+                Spacer()
+
+                Text(currentStepCounter)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+
+            ProgressView(value: onboardingManager.progress)
+                .tint(.brandPrimary)
+        }
+        .padding(.horizontal, 4)
+    }
+
     private var completionView: some View {
-        VStack(spacing: 32) {
-            Spacer()
+        VStack(spacing: 24) {
+            Spacer(minLength: 0)
 
-            // 完成动画 - 玻璃拟态风格
-            ZStack {
-                // 外圈光晕
-                Circle()
-                    .fill(Color.swipeKeep.opacity(0.08))
-                    .frame(width: 200, height: 200)
-                    .blur(radius: 20)
+            VStack(spacing: 24) {
+                ZStack {
+                    Circle()
+                        .fill(Color.swipeKeep.opacity(0.14))
+                        .frame(width: 88, height: 88)
 
-                Circle()
-                    .fill(Color.swipeKeep.opacity(0.12))
-                    .frame(width: 160, height: 160)
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 46, weight: .semibold))
+                        .foregroundColor(.swipeKeep)
+                }
 
-                Circle()
-                    .fill(Color.swipeKeep.opacity(0.2))
-                    .frame(width: 120, height: 120)
+                VStack(spacing: 12) {
+                    Text("准备就绪！")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundColor(.primary)
 
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 70, weight: .medium))
-                    .foregroundColor(.swipeKeep)
-                    .symbolEffect(.bounce)
+                    Text("左滑标记待删除，最后统一确认删除。\n可选右滑归档到相册。")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(6)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    completionRow("快速决策：左右滑处理候选照片", icon: "arrow.left.arrow.right")
+                    completionRow("删除安全：整轮确认一次", icon: "tray.full.fill")
+                }
             }
+            .padding(24)
+            .adaptiveLiquidGlass(cornerRadius: 32, tint: .white.opacity(0.1))
 
-            VStack(spacing: 16) {
-                Text("准备就绪！")
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
-                    .foregroundColor(.primary)
-
-                Text("你已经掌握了所有技巧\n开始整理你的相册吧")
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(6)
-            }
-
-            Spacer()
+            Spacer(minLength: 0)
 
             Button(action: {
                 HapticService.shared.celebration()
                 onboardingManager.completeOnboarding()
             }) {
                 HStack(spacing: 8) {
-                    Text("开始整理")
-                        .font(.headline)
-                        .fontWeight(.semibold)
-
+                    Text("开始删图")
                     Image(systemName: "arrow.right")
                         .font(.system(size: 16, weight: .semibold))
                 }
-                .foregroundColor(.white)
+                .font(.headline.weight(.semibold))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 18)
-                .background(
-                    LinearGradient.success
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .floatingShadow(colorScheme: colorScheme)
             }
-            .padding(.horizontal)
-            .padding(.bottom, 40)
+            .adaptiveGlassProminentButton(cornerRadius: 20, expands: true)
         }
-        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var currentStepTitle: String {
+        switch onboardingManager.currentStep {
+        case .welcome:
+            return "欢迎使用"
+        case .permission:
+            return "权限设置"
+        case .complete:
+            return "开始前确认"
+        }
+    }
+
+    private var currentStepCounter: String {
+        switch onboardingManager.currentStep {
+        case .welcome:
+            return "1 / 3"
+        case .permission:
+            return "2 / 3"
+        case .complete:
+            return "3 / 3"
+        }
+    }
+
+    private func completionRow(_ text: String, icon: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.swipeKeep)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.swipeKeep.opacity(0.12))
+                )
+
+            Text(text)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
     }
 }
 

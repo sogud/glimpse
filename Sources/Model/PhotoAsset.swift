@@ -1,3 +1,4 @@
+import Foundation
 import Photos
 import SwiftUI
 #if canImport(UIKit)
@@ -8,10 +9,19 @@ import AppKit
 typealias PlatformImage = NSImage
 #endif
 
+enum OriginalFileSizeState: Equatable {
+    case idle
+    case loadingRemote
+    case ready(Int64)
+    case failed
+}
+
 /// PhotoAsset包装类，用于在SwiftUI中使用PHAsset
 /// 由于PHAsset不是ObservableObject，我们需要创建一个包装器
 class PhotoAsset: ObservableObject, Identifiable {
     private static let imageManager = PHCachingImageManager()
+    private static let resourceManager = PHAssetResourceManager.default()
+    private static let fileSizeCache = NSCache<NSString, NSNumber>()
 
     let id: String
     let asset: PHAsset
@@ -19,10 +29,12 @@ class PhotoAsset: ObservableObject, Identifiable {
     // 缓存的图片数据
     @Published var image: PlatformImage?
     @Published var isLoading = false
+    @Published private(set) var originalFileSizeState: OriginalFileSizeState = .idle
 
     private var requestID: PHImageRequestID = PHInvalidImageRequestID
     private var requestedTargetSize: CGSize = .zero
     private var loadedTargetSize: CGSize = .zero
+    private var fileSizeLoader: ResourceSizeLoader?
 
     init(asset: PHAsset) {
         self.asset = asset
@@ -117,8 +129,13 @@ class PhotoAsset: ObservableObject, Identifiable {
 
     /// 文件大小（字节）
     var fileSize: Int64? {
-        let resources = PHAssetResource.assetResources(for: asset)
-        return resources.first?.value(forKey: "fileSize") as? Int64
+        if case .ready(let bytes) = originalFileSizeState {
+            return bytes
+        }
+        if let cached = Self.cachedFileSize(for: id) {
+            return cached
+        }
+        return nil
     }
 
     /// 格式化后的文件大小字符串
@@ -141,10 +158,125 @@ class PhotoAsset: ObservableObject, Identifiable {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
+    func loadOriginalFileSize() {
+        if case .ready = originalFileSizeState {
+            return
+        }
+
+        if let cached = Self.cachedFileSize(for: id) {
+            originalFileSizeState = .ready(cached)
+            return
+        }
+
+        guard let resource = preferredOriginalResource else {
+            originalFileSizeState = .failed
+            return
+        }
+
+        cancelOriginalFileSizeLoad(resetState: false)
+
+        originalFileSizeState = .loadingRemote
+
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+        let source = PhotoAssetResourceDataSource(
+            resource: resource,
+            options: options,
+            manager: Self.resourceManager
+        )
+        let loader = ResourceSizeLoader(source: source)
+        fileSizeLoader = loader
+        loader.load { [weak self, weak loader] result in
+            DispatchQueue.main.async {
+                guard let self, let loader, self.fileSizeLoader === loader else { return }
+                self.fileSizeLoader = nil
+
+                if case .success(let resolvedSize) = result, resolvedSize > 0 {
+                    Self.cache(fileSize: resolvedSize, for: self.id)
+                    self.originalFileSizeState = .ready(resolvedSize)
+                } else {
+                    self.originalFileSizeState = .failed
+                }
+            }
+        }
+    }
+
+    func cancelOriginalFileSizeLoad(resetState: Bool = true) {
+        fileSizeLoader?.cancel()
+        fileSizeLoader = nil
+
+        if resetState, case .loadingRemote = originalFileSizeState {
+            originalFileSizeState = .idle
+        }
+    }
+
+    private var preferredOriginalResource: PHAssetResource? {
+        let resources = PHAssetResource.assetResources(for: asset)
+
+        if asset.mediaType == .video {
+            return firstResource(in: resources, matching: [.fullSizeVideo, .video])
+        }
+
+        return firstResource(in: resources, matching: [.fullSizePhoto, .photo, .alternatePhoto])
+    }
+
+    private func firstResource(
+        in resources: [PHAssetResource],
+        matching preferredTypes: [PHAssetResourceType]
+    ) -> PHAssetResource? {
+        for type in preferredTypes {
+            if let resource = resources.first(where: { $0.type == type }) {
+                return resource
+            }
+        }
+        return resources.first
+    }
+
+    private static func cachedFileSize(for identifier: String) -> Int64? {
+        fileSizeCache.object(forKey: identifier as NSString)?.int64Value
+    }
+
+    private static func cache(fileSize: Int64, for identifier: String) {
+        fileSizeCache.setObject(NSNumber(value: fileSize), forKey: identifier as NSString)
+    }
+
     /// 取消所有正在进行的请求
     deinit {
         if requestID != PHInvalidImageRequestID {
             Self.imageManager.cancelImageRequest(requestID)
         }
+        cancelOriginalFileSizeLoad(resetState: false)
+    }
+}
+
+private final class PhotoAssetResourceDataSource: ResourceDataSource {
+    private let resource: PHAssetResource
+    private let options: PHAssetResourceRequestOptions
+    private let manager: PHAssetResourceManager
+
+    init(
+        resource: PHAssetResource,
+        options: PHAssetResourceRequestOptions,
+        manager: PHAssetResourceManager
+    ) {
+        self.resource = resource
+        self.options = options
+        self.manager = manager
+    }
+
+    func requestData(
+        received: @escaping (Data) -> Void,
+        completion: @escaping (Error?) -> Void
+    ) -> Int32 {
+        manager.requestData(
+            for: resource,
+            options: options,
+            dataReceivedHandler: received,
+            completionHandler: completion
+        )
+    }
+
+    func cancel(requestID: Int32) {
+        manager.cancelDataRequest(requestID)
     }
 }

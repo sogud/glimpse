@@ -17,9 +17,20 @@ struct SwipeView: View {
     private let maxOffset: CGFloat = 200
 
     // 用户设置
-    @AppStorage("swipeLeftAlbum") private var swipeLeftAlbum: String = ""
     @AppStorage("swipeRightAlbum") private var swipeRightAlbum: String = ""
-    @AppStorage("enableHardDelete") private var enableHardDelete = false
+
+    private var activeWorkflow: CleanupWorkflow {
+        viewModel.activeWorkflow ?? .delete
+    }
+
+    private var currentArchiveAlbum: String? {
+        if let sessionAlbum = viewModel.selectedTargetAlbum?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sessionAlbum.isEmpty {
+            return sessionAlbum
+        }
+        let trimmed = swipeRightAlbum.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     private var swipeProgress: CGFloat {
         min(abs(dragOffset.width) / 140, 1)
@@ -27,9 +38,12 @@ struct SwipeView: View {
 
     private var swipeColor: Color {
         if dragOffset.width < 0 {
-            return (enableHardDelete || swipeLeftAlbum.isEmpty) ? .swipeDelete : .swipeArchive
+            return activeWorkflow == .delete ? .swipeDelete : .swipeSkip
         }
         if dragOffset.width > 0 {
+            if activeWorkflow == .organize || currentArchiveAlbum != nil {
+                return .swipeArchive
+            }
             return .swipeKeep
         }
         return .clear
@@ -149,11 +163,11 @@ struct SwipeView: View {
     }
 
     private var leftSwipeLabel: some View {
-        let showsDeleteStyle = enableHardDelete || swipeLeftAlbum.isEmpty
-        let label = showsDeleteStyle ? "删除" : swipeLeftAlbum
-        let color = showsDeleteStyle ? Color.swipeDelete : Color.swipeArchive
+        let isDeleteWorkflow = activeWorkflow == .delete
+        let label = isDeleteWorkflow ? "待删除" : "跳过"
+        let color = isDeleteWorkflow ? Color.swipeDelete : Color.swipeSkip
         return VStack(spacing: 4) {
-            Image(systemName: showsDeleteStyle ? "trash.fill" : "arrow.left")
+            Image(systemName: isDeleteWorkflow ? "trash.fill" : "arrow.left")
                 .font(.system(size: 20, weight: .semibold))
             Text(label)
                 .font(.caption)
@@ -167,9 +181,12 @@ struct SwipeView: View {
     }
 
     private var rightSwipeLabel: some View {
-        let label = swipeRightAlbum.isEmpty ? "保留" : swipeRightAlbum
+        let isArchiveAction = activeWorkflow == .organize || currentArchiveAlbum != nil
+        let label = currentArchiveAlbum ?? "保留"
+        let iconName = isArchiveAction ? "folder.badge.plus" : "arrow.right"
+        let tint = isArchiveAction ? Color.swipeArchive : Color.swipeKeep
         return VStack(spacing: 4) {
-            Image(systemName: "arrow.right")
+            Image(systemName: iconName)
                 .font(.system(size: 20, weight: .semibold))
             Text(label)
                 .font(.caption)
@@ -178,8 +195,8 @@ struct SwipeView: View {
         .foregroundColor(.white)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .adaptiveLiquidGlass(cornerRadius: 18, tint: Color.swipeKeep.opacity(0.28))
-        .shadow(color: Color.swipeKeep.opacity(0.4), radius: 8, x: 0, y: 4)
+        .adaptiveLiquidGlass(cornerRadius: 18, tint: tint.opacity(0.28))
+        .shadow(color: tint.opacity(0.4), radius: 8, x: 0, y: 4)
     }
 
     private var swipeFeedbackGlow: some View {
@@ -241,7 +258,7 @@ struct SwipeView: View {
                     .fontWeight(.bold)
                     .foregroundColor(.primary)
 
-                Text("本次整理完成")
+                Text("本轮处理完成")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -313,15 +330,17 @@ struct SwipeView: View {
         // 触觉反馈
         switch action {
         case .left:
-            if enableHardDelete {
+            if activeWorkflow == .delete {
                 HapticService.shared.swipeDelete()
-            } else if !swipeLeftAlbum.isEmpty {
-                HapticService.shared.swipeArchive()
             } else {
-                HapticService.shared.swipeDelete()
+                HapticService.shared.swipeSkip()
             }
         case .right:
-            HapticService.shared.swipeKeep()
+            if activeWorkflow == .organize || currentArchiveAlbum != nil {
+                HapticService.shared.swipeArchive()
+            } else {
+                HapticService.shared.swipeKeep()
+            }
         }
 
         Task { @MainActor in
@@ -334,12 +353,7 @@ struct SwipeView: View {
             try? await Task.sleep(nanoseconds: 120_000_000)
 
             let direction: GestureDirection = action == .left ? .left : .right
-            await viewModel.performSwipe(
-                direction,
-                leftSwipeAlbum: swipeLeftAlbum,
-                rightSwipeAlbum: swipeRightAlbum,
-                enableHardDelete: enableHardDelete
-            )
+            await viewModel.performSwipe(direction, archiveAlbum: currentArchiveAlbum)
 
             var transaction = Transaction()
             transaction.animation = nil

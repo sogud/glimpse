@@ -34,7 +34,7 @@ struct RootView: View {
                 OnboardingView()
                     .environmentObject(onboardingManager)
             } else {
-                ContentView()
+                MainTabView()
                     .environmentObject(onboardingManager)
             }
         }

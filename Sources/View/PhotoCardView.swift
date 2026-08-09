@@ -67,14 +67,19 @@ struct PhotoCardView: View {
             }
             .onAppear {
                 photoAsset.loadImage(targetSize: requestSize)
+                photoAsset.loadOriginalFileSize()
             }
             .onChange(of: photoAsset.id) {
                 isPlayingVideo = false
                 isVideoLoading = false
                 photoAsset.loadImage(targetSize: requestSize)
+                photoAsset.loadOriginalFileSize()
             }
             .onChange(of: requestSize) { _, newSize in
                 photoAsset.loadImage(targetSize: newSize)
+            }
+            .onDisappear {
+                photoAsset.cancelOriginalFileSizeLoad(resetState: false)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -105,11 +110,14 @@ struct PhotoCardView: View {
     private func photoContentArea(in geometry: GeometryProxy) -> some View {
         photoImage(in: geometry)
             .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .overlay(alignment: .bottom) {
+                bottomMetadataOverlay
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: 26, style: .continuous)
                     .stroke(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.28), lineWidth: 0.8)
             )
-        .compositingGroup()
+            .compositingGroup()
     }
 
     @ViewBuilder
@@ -136,7 +144,7 @@ struct PhotoCardView: View {
 
                 // 视频播放图标
                 if photoAsset.isVideo {
-                    videoOverlay
+                    videoPlayOverlay
                 }
             } else if photoAsset.isLoading {
                 loadingView
@@ -169,8 +177,49 @@ struct PhotoCardView: View {
         )
     }
 
-    // 视频覆盖层 - 播放图标和时长
-    private var videoOverlay: some View {
+    private var bottomMetadataOverlay: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            if shouldShowFileSizeChip {
+                fileSizeChip
+            }
+
+            Spacer(minLength: 0)
+
+            if let duration = photoAsset.videoDuration {
+                durationChip(duration)
+            }
+        }
+        .padding(10)
+    }
+
+    private var shouldShowFileSizeChip: Bool {
+        switch photoAsset.originalFileSizeState {
+        case .idle:
+            return false
+        case .loadingRemote, .ready, .failed:
+            return true
+        }
+    }
+
+    @ViewBuilder
+    private var fileSizeChip: some View {
+        switch photoAsset.originalFileSizeState {
+        case .idle:
+            EmptyView()
+        case .loadingRemote:
+            metadataChip(icon: "icloud.and.arrow.down", text: "获取大小...")
+        case .ready(let bytes):
+            metadataChip(
+                icon: photoAsset.isVideo ? "film.fill" : "photo.fill",
+                text: ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+            )
+        case .failed:
+            metadataChip(icon: "exclamationmark.triangle.fill", text: "大小不可用")
+        }
+    }
+
+    // 视频覆盖层 - 播放图标
+    private var videoPlayOverlay: some View {
         VStack {
             Spacer()
 
@@ -192,26 +241,25 @@ struct PhotoCardView: View {
             }
 
             Spacer()
-
-            // 视频时长
-            if let duration = photoAsset.videoDuration {
-                HStack {
-                    Spacer()
-
-                    HStack(spacing: 4) {
-                        Image(systemName: "video.fill")
-                            .font(.caption)
-                        Text(duration)
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .adaptiveLiquidGlass(cornerRadius: 14, tint: .black.opacity(0.08))
-                    .padding(10)
-                }
-            }
         }
+    }
+
+    private func durationChip(_ duration: String) -> some View {
+        metadataChip(icon: "video.fill", text: duration)
+    }
+
+    private func metadataChip(icon: String, text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+            Text(text)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .adaptiveLiquidGlass(cornerRadius: 14, tint: .black.opacity(0.08))
     }
 
     private var videoLoadingOverlay: some View {

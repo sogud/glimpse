@@ -11,36 +11,19 @@ import Photos
 /// 新手引导步骤
 enum OnboardingStep: Int, CaseIterable {
     case welcome = 0
-    case tutorial
     case permission
-    case albumSetup
     case complete
 
     var title: String {
         switch self {
         case .welcome:
             return "欢迎"
-        case .tutorial:
-            return "手势教程"
         case .permission:
             return "权限申请"
-        case .albumSetup:
-            return "相册设置"
         case .complete:
             return "准备就绪"
         }
     }
-}
-
-/// 引导页面数据
-struct OnboardingPage {
-    let step: OnboardingStep
-    let title: String
-    let subtitle: String
-    let description: String
-    let imageName: String
-    let primaryButtonTitle: String
-    let secondaryButtonTitle: String?
 }
 
 /// 管理新手引导流程
@@ -55,9 +38,6 @@ class OnboardingManager: ObservableObject {
     /// 是否正在显示引导
     @Published var isOnboarding: Bool = false
     
-    /// 教程中手势完成情况
-    @Published var completedGestures: Set<GestureDirection> = []
-    
     // MARK: - Computed Properties
     
     /// 是否已完成所有引导步骤
@@ -68,11 +48,6 @@ class OnboardingManager: ObservableObject {
     /// 当前步骤进度 (0.0 - 1.0)
     var progress: Double {
         Double(currentStep.rawValue) / Double(OnboardingStep.allCases.count - 1)
-    }
-    
-    /// 是否所有教程手势都已完成（只要求左右滑动）
-    var isTutorialCompleted: Bool {
-        completedGestures.contains(.left) && completedGestures.contains(.right)
     }
     
     // MARK: - Initialization
@@ -90,7 +65,6 @@ class OnboardingManager: ObservableObject {
     func startOnboarding() {
         currentStep = .welcome
         isOnboarding = true
-        completedGestures.removeAll()
     }
     
     /// 进入下一步
@@ -135,20 +109,7 @@ class OnboardingManager: ObservableObject {
     /// 重置引导状态（用于测试）
     func resetOnboarding() {
         UserDefaults.standard.removeObject(forKey: Keys.onboardingCompleted)
-        completedGestures.removeAll()
         startOnboarding()
-    }
-    
-    /// 标记手势为已完成
-    func markGestureCompleted(_ direction: GestureDirection) {
-        guard direction != .none else { return }
-        
-        withAnimation(.spring()) {
-            _ = completedGestures.insert(direction)
-        }
-        
-        // 震动反馈
-        HapticService.shared.success()
     }
     
     // MARK: - Private

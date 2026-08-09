@@ -182,6 +182,42 @@ extension LinearGradient {
     )
 }
 
+// MARK: - 通用背景
+
+struct PhotoSortAmbientBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            if colorScheme == .dark {
+                LinearGradient(
+                    colors: [
+                        Color.black,
+                        Color(red: 0.05, green: 0.09, blue: 0.13),
+                        Color.black
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            } else {
+                LinearGradient.background
+            }
+
+            Circle()
+                .fill(Color(red: 0.72, green: 0.89, blue: 1.0).opacity(colorScheme == .dark ? 0.12 : 0.3))
+                .frame(width: 320, height: 320)
+                .blur(radius: 50)
+                .offset(x: -130, y: -220)
+
+            Circle()
+                .fill(Color(red: 0.72, green: 1.0, blue: 0.93).opacity(colorScheme == .dark ? 0.08 : 0.22))
+                .frame(width: 360, height: 360)
+                .blur(radius: 70)
+                .offset(x: 150, y: 260)
+        }
+    }
+}
+
 // MARK: - 阴影参数
 
 extension View {
@@ -355,5 +391,138 @@ private struct AdaptiveLiquidGlassModifier: ViewModifier {
                         )
                 )
         }
+    }
+}
+
+// MARK: - 按钮样式
+
+extension View {
+    /// 自适应玻璃按钮。iOS 26+ 使用原生玻璃按钮，其余版本回退到现有玻璃外观。
+    @ViewBuilder
+    func adaptiveGlassButton(
+        cornerRadius: CGFloat = 18,
+        tint: Color = .white.opacity(0.08),
+        expands: Bool = false
+    ) -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            buttonStyle(.glass)
+                .buttonBorderShape(.roundedRectangle(radius: cornerRadius))
+        } else {
+            buttonStyle(
+                FallbackGlassButtonStyle(
+                    cornerRadius: cornerRadius,
+                    tint: tint,
+                    expands: expands
+                )
+            )
+        }
+    }
+
+    /// 自适应强调按钮。iOS 26+ 使用原生突出玻璃按钮，其余版本回退到品牌 CTA。
+    @ViewBuilder
+    func adaptiveGlassProminentButton(
+        cornerRadius: CGFloat = 18,
+        expands: Bool = false
+    ) -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            buttonStyle(.glassProminent)
+                .buttonBorderShape(.roundedRectangle(radius: cornerRadius))
+        } else {
+            buttonStyle(
+                FallbackProminentGlassButtonStyle(
+                    cornerRadius: cornerRadius,
+                    expands: expands
+                )
+            )
+        }
+    }
+}
+
+private struct FallbackGlassButtonStyle: ButtonStyle {
+    let cornerRadius: CGFloat
+    let tint: Color
+    let expands: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        FallbackGlassButtonBody(
+            configuration: configuration,
+            cornerRadius: cornerRadius,
+            tint: tint,
+            expands: expands
+        )
+    }
+}
+
+private struct FallbackGlassButtonBody: View {
+    let configuration: ButtonStyle.Configuration
+    let cornerRadius: CGFloat
+    let tint: Color
+    let expands: Bool
+
+    var body: some View {
+        configuration.label
+            .frame(maxWidth: expands ? .infinity : nil)
+            .padding(.horizontal, expands ? 18 : 14)
+            .padding(.vertical, 15)
+            .adaptiveLiquidGlass(cornerRadius: cornerRadius, tint: tint, interactive: true)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.92 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.8), value: configuration.isPressed)
+    }
+}
+
+private struct FallbackProminentGlassButtonStyle: ButtonStyle {
+    let cornerRadius: CGFloat
+    let expands: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        FallbackProminentGlassButtonBody(
+            configuration: configuration,
+            cornerRadius: cornerRadius,
+            expands: expands
+        )
+    }
+}
+
+private struct FallbackProminentGlassButtonBody: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let configuration: ButtonStyle.Configuration
+    let cornerRadius: CGFloat
+    let expands: Bool
+
+    var body: some View {
+        configuration.label
+            .frame(maxWidth: expands ? .infinity : nil)
+            .padding(.horizontal, expands ? 18 : 14)
+            .padding(.vertical, 15)
+            .foregroundStyle(.white)
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(LinearGradient.brand)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(colorScheme == .dark ? 0.2 : 0.28), lineWidth: 1)
+                    )
+            )
+            .shadow(
+                color: Color.black.opacity(colorScheme == .dark ? 0.28 : 0.12),
+                radius: 14,
+                x: 0,
+                y: 8
+            )
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.94 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.8), value: configuration.isPressed)
+    }
+}
+
+struct SubtleRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .scaleEffect(configuration.isPressed ? 0.992 : 1)
+            .opacity(configuration.isPressed ? 0.84 : 1)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }

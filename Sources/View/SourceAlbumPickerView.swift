@@ -11,199 +11,157 @@ import Photos
 /// 源相册选择器视图
 struct SourceAlbumPickerView: View {
     @ObservedObject var viewModel: PhotoSwipeViewModel
+    let workflow: CleanupWorkflow
+    let targetAlbum: String?
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var colorScheme
 
     @State private var albums: [PHAssetCollection] = []
     @State private var isLoading = true
-    @State private var photoCount: Int = 0
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                Group {
-                    if #available(iOS 26.0, macOS 26.0, *) {
-                        GlassEffectContainer(spacing: 16) {
-                            selectedAlbumHeader
-                        }
-                    } else {
+        NavigationStack {
+            ZStack {
+                PhotoSortAmbientBackground()
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
                         selectedAlbumHeader
+                        pickerCardStack
                     }
-                }
-                .padding()
-                .background(colorScheme == .dark ? Color.black : Color.clear)
-
-                Divider()
-
-                // 相册列表
-                if isLoading {
-                    Spacer()
-                    ProgressView("加载相册中...")
-                    Spacer()
-                } else {
-                    List {
-                        // 所有照片选项
-                        allPhotosSection
-
-                        // 用户相册列表
-                        userAlbumsSection
-                    }
-                    .listStyle(.insetGrouped)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 18)
+                    .padding(.bottom, 40)
                 }
             }
-            .navigationTitle("选择相册")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationTitle("选择来源")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("完成") {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") {
                         dismiss()
                     }
+                }
+
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Text(workflow == .delete ? "删图" : "归档")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
             }
             .onAppear {
                 loadAlbums()
-                updatePhotoCount()
             }
         }
     }
 
     // MARK: - Subviews
 
+    @ViewBuilder
+    private var pickerCardStack: some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            GlassEffectContainer(spacing: 22) {
+                pickerCardStackContent
+            }
+        } else {
+            pickerCardStackContent
+        }
+    }
+
+    private var pickerCardStackContent: some View {
+        VStack(spacing: 18) {
+            allPhotosCard
+            userAlbumsCard
+        }
+    }
+
     private var selectedAlbumHeader: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 40))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: workflow == .delete ? "photo.stack.fill" : "folder.badge.plus")
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(.brandPrimary)
+                    .frame(width: 42, height: 42)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.brandPrimary.opacity(0.14))
+                    )
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("当前选择")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
+                VStack(alignment: .trailing, spacing: 2) {
                     Text(viewModel.selectedSourceAlbum ?? "所有照片")
                         .font(.title3)
                         .fontWeight(.semibold)
                         .foregroundColor(.primary)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.trailing)
                 }
             }
-
-            HStack {
-                Text("共 \(photoCount) 张照片待整理")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-
-                Spacer()
-            }
         }
-        .padding()
-        .adaptiveLiquidGlass(cornerRadius: 24, tint: .white.opacity(0.1))
+        .padding(18)
+        .adaptiveLiquidGlass(cornerRadius: 28, tint: .white.opacity(0.1))
     }
 
-    private var allPhotosSection: some View {
-        Section {
+    private var allPhotosCard: some View {
+        AlbumPickerSectionCard(
+            title: "全部照片",
+            footer: workflow == .delete ? "从整个照片库开始筛删，适合做一轮总清理。" : "从整个照片库开始归档，适合快速把值得保留的内容收进目标相册。"
+        ) {
             Button(action: {
                 selectAlbum(nil)
             }) {
-                HStack(spacing: 16) {
-                    // 图标
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.brandPrimary.opacity(0.15))
-                            .frame(width: 44, height: 44)
-
-                        Image(systemName: "photo.on.rectangle")
-                            .font(.system(size: 20))
-                            .foregroundColor(.brandPrimary)
-                    }
-
-                    // 文字
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("所有照片")
-                            .font(.body)
-                            .fontWeight(.medium)
-                            .foregroundColor(.primary)
-
-                        Text("从整个照片库开始整理")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    Spacer()
-
-                    // 选中标记
-                    if viewModel.selectedSourceAlbum == nil {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundColor(.brandPrimary)
-                    }
-                }
+                AlbumPickerOptionRow(
+                    icon: "photo.on.rectangle",
+                    iconColor: .brandPrimary,
+                    title: "所有照片",
+                    subtitle: workflow == .delete ? "从整个照片库开始筛删" : "从整个照片库开始归档",
+                    isSelected: viewModel.selectedSourceAlbum == nil
+                )
             }
-            .buttonStyle(PlainButtonStyle())
-        } header: {
-            Text("全部照片")
+            .buttonStyle(SubtleRowButtonStyle())
         }
     }
 
-    private var userAlbumsSection: some View {
-        Section {
+    private var userAlbumsCard: some View {
+        AlbumPickerSectionCard(
+            title: "我的相册",
+            footer: "选择特定相册可以更有针对性地开始一轮处理。"
+        ) {
             if albums.isEmpty {
-                Text("没有用户创建的相册")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 20)
+                if isLoading {
+                    AlbumPickerLoadingState(title: "加载相册中...")
+                } else {
+                    Text("没有用户创建的相册")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 20)
+                }
             } else {
-                ForEach(albums, id: \.localIdentifier) { album in
+                ForEach(Array(albums.enumerated()), id: \.element.localIdentifier) { index, album in
                     Button(action: {
                         selectAlbum(album.localizedTitle)
                     }) {
-                        HStack(spacing: 16) {
-                            // 图标
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 10)
-                                    .fill(Color.labelBlue.opacity(0.15))
-                                    .frame(width: 44, height: 44)
+                        VStack(spacing: 14) {
+                            AlbumPickerOptionRow(
+                                icon: "folder",
+                                iconColor: .labelBlue,
+                                title: album.localizedTitle ?? "未知相册",
+                                subtitle: "\(album.estimatedAssetCount) 张照片",
+                                isSelected: viewModel.selectedSourceAlbum == album.localizedTitle
+                            )
 
-                                Image(systemName: "folder")
-                                    .font(.system(size: 20))
-                                    .foregroundColor(.labelBlue)
-                            }
-
-                            // 文字
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(album.localizedTitle ?? "未知相册")
-                                    .font(.body)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.primary)
-
-                                Text("\(album.estimatedAssetCount) 张照片")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Spacer()
-
-                            // 选中标记
-                            if viewModel.selectedSourceAlbum == album.localizedTitle {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 24))
-                                    .foregroundColor(.brandPrimary)
+                            if index < albums.count - 1 {
+                                AlbumPickerDivider()
                             }
                         }
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(SubtleRowButtonStyle())
                 }
             }
-        } header: {
-            Text("我的相册")
-        } footer: {
-            Text("选择特定相册可以更有针对性地整理照片")
-                .font(.caption)
-                .foregroundColor(.secondary)
         }
     }
 
@@ -231,33 +189,18 @@ struct SourceAlbumPickerView: View {
         isLoading = false
     }
 
-    private func updatePhotoCount() {
-        photoCount = viewModel.allPhotos.count
-    }
-
     private func selectAlbum(_ albumName: String?) {
-        viewModel.selectedSourceAlbum = albumName
         HapticService.shared.selection()
 
-        // 重新加载照片
         Task {
-            do {
-                // 先清空当前照片列表，强制刷新
-                await MainActor.run {
-                    viewModel.allPhotos = []
-                    viewModel.currentPhoto = nil
-                }
-                
-                try await viewModel.loadPhotos()
-                
-                await MainActor.run {
-                    updatePhotoCount()
-                    dismiss()
-                }
-            } catch {
-                await MainActor.run {
-                    dismiss()
-                }
+            await viewModel.startSession(
+                workflow: workflow,
+                preset: .advancedAlbum,
+                sourceAlbum: albumName,
+                targetAlbum: targetAlbum
+            )
+            await MainActor.run {
+                dismiss()
             }
         }
     }
@@ -277,10 +220,18 @@ extension PHAssetCollection {
 
 // MARK: - Preview
 #Preview("Light Mode") {
-    SourceAlbumPickerView(viewModel: PhotoSwipeViewModel())
+    SourceAlbumPickerView(
+        viewModel: PhotoSwipeViewModel(),
+        workflow: .delete,
+        targetAlbum: nil
+    )
 }
 
 #Preview("Dark Mode") {
-    SourceAlbumPickerView(viewModel: PhotoSwipeViewModel())
+    SourceAlbumPickerView(
+        viewModel: PhotoSwipeViewModel(),
+        workflow: .delete,
+        targetAlbum: nil
+    )
         .preferredColorScheme(.dark)
 }

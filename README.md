@@ -1,67 +1,34 @@
-# PhotoSwipeCleaner
+# PhotoSort (PhotoSwipeCleaner)
 
-一款简洁高效的 iOS 照片整理应用，通过左右滑动快速整理相册。
+一个 iOS 照片清理工具：用滑动快速做决定，删除操作先“标记待删除”，最后一次性提交给系统相册确认。
 
-## 功能特性
+This is an iOS photo cleanup tool: swipe to decide quickly. Deletions are staged first and then committed in one batch confirmation.
 
-- **滑动整理**：左右滑动照片，快速决定保留或删除
-- **视频支持**：支持视频预览和播放
-- **相册管理**：将照片移动到指定相册
-- **撤销功能**：所有操作都可撤销
-- **批量处理**：支持按相册筛选整理
-- **手势动画**：流畅的卡片滑动动画
-- **暗黑模式**：支持浅色/深色主题
+## Features / 功能
 
-## 技术栈
+- Delete-first workflow: swipe left to mark for deletion, then batch delete once.
+- Optional organize workflow: swipe right to move to a target album.
+- Candidate presets: Screenshots, Videos, Recent 30 days (plus an advanced album source).
+- Undo for the last action in a session.
+- File size chip on cards (fetches from iCloud when needed, without blocking swipes).
 
-- SwiftUI
+## Privacy / 隐私
+
+- Photos stay on device. The app uses PhotoKit and does not upload your media.
+- Deletions go to the system “Recently Deleted” album, where you can recover them.
+
+## Requirements / 环境
+
 - iOS 18.2+
-- PhotoKit
-- AVKit
+- Xcode 16.2+
 
-## 安装
+## Build & Run / 构建运行
 
-1. 克隆项目
-```bash
-git clone https://github.com/yourusername/PhotoSwipeCleaner.git
-```
+1. Open `PhotoSort.xcodeproj` in Xcode.
+2. Select a device (real device recommended for PhotoKit behavior).
+3. Build and Run.
 
-2. 打开项目
-```bash
-cd PhotoSwipeCleaner
-open PhotoSort.xcodeproj
-```
+## Notes / 说明
 
-3. 构建并运行（需要 Xcode 16.2+）
-
-## 使用说明
-
-1. 首次启动授予相册权限
-2. 设置左滑/右滑目标相册
-3. 开始滑动整理照片
-4. 使用底部撤销按钮回退操作
-
-## 项目结构
-
-```
-PhotoSort/
-├── App/                    # 应用入口
-├── Model/                  # 数据模型
-├── View/                   # UI 视图
-├── ViewModel/              # 视图模型
-├── Service/                # 服务层
-├── Core/Services/          # 核心服务
-└── UI/                     # UI 组件
-```
-
-## 截图
-
-（待添加）
-
-## License
-
-MIT License
-
-## 作者
-
-Your Name
+- Some PhotoKit confirmations are controlled by iOS and cannot be fully removed. Batch deletion reduces repeated prompts.
+- Limited Photos access (iOS “Select Photos…”) will only show the items you granted.
