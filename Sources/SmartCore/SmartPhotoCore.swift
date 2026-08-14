@@ -8,7 +8,8 @@ enum PhotoSortDataContainer {
             return try ModelContainer(
                 for: PhotoDecisionEntity.self,
                 SmartAnalysisRecordEntity.self,
-                SmartAnalysisMetadataEntity.self
+                SmartAnalysisMetadataEntity.self,
+                PhotoClassificationTaskEntity.self
             )
         } catch {
             fatalError("无法创建本地数据存储: \(error.localizedDescription)")

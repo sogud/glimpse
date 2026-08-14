@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		4CB735792F25129B00438EA1 /* PhotoSort.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoSort.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000001 /* GlimpseMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlimpseMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +17,27 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		A10000000000000000000002 /* MacApp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MacApp;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000003 /* SmartCore */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Sources/SmartCore;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		4CB735762F25129B00438EA1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000004 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +51,8 @@
 			isa = PBXGroup;
 			children = (
 				4CB7357B2F25129B00438EA1 /* Sources */,
+				A10000000000000000000002 /* MacApp */,
+				A10000000000000000000003 /* SmartCore */,
 				4CB7357A2F25129B00438EA1 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				4CB735792F25129B00438EA1 /* PhotoSort.app */,
+				A10000000000000000000001 /* GlimpseMac.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,6 +91,29 @@
 			productReference = 4CB735792F25129B00438EA1 /* PhotoSort.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A10000000000000000000007 /* GlimpseMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1000000000000000000000A /* Build configuration list for PBXNativeTarget "GlimpseMac" */;
+			buildPhases = (
+				A10000000000000000000006 /* Sources */,
+				A10000000000000000000004 /* Frameworks */,
+				A10000000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000002 /* MacApp */,
+				A10000000000000000000003 /* SmartCore */,
+			);
+			name = GlimpseMac;
+			packageProductDependencies = (
+			);
+			productName = GlimpseMac;
+			productReference = A10000000000000000000001 /* GlimpseMac.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -82,6 +126,9 @@
 				TargetAttributes = {
 					4CB735782F25129B00438EA1 = {
 						CreatedOnToolsVersion = 16.2;
+					};
+					A10000000000000000000007 = {
+						CreatedOnToolsVersion = 16.4;
 					};
 				};
 			};
@@ -100,6 +147,7 @@
 			projectRoot = "";
 			targets = (
 				4CB735782F25129B00438EA1 /* PhotoSort */,
+				A10000000000000000000007 /* GlimpseMac */,
 			);
 		};
 /* End PBXProject section */
@@ -112,10 +160,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A10000000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4CB735752F25129B00438EA1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000006 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -305,6 +367,64 @@
 			};
 			name = Release;
 		};
+		A10000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4Q8DV9RJG4;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Glimpse;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "需要向你确认的相册添加分类后的照片";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "需要读取照片并在本机生成分类建议";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = everthing.GlimpseMac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A10000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4Q8DV9RJG4;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Glimpse;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "需要向你确认的相册添加分类后的照片";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "需要读取照片并在本机生成分类建议";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = everthing.GlimpseMac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -322,6 +442,15 @@
 			buildConfigurations = (
 				4CB735882F25129C00438EA1 /* Debug */,
 				4CB735892F25129C00438EA1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1000000000000000000000A /* Build configuration list for PBXNativeTarget "GlimpseMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000008 /* Debug */,
+				A10000000000000000000009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

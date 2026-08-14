@@ -20,6 +20,7 @@ This is an iOS photo cleanup tool: swipe to decide quickly. Deletions are staged
 ## Requirements / 环境
 
 - iOS 18.2+
+- macOS 15+（Apple Silicon，仅本地开发版本）
 - Xcode 16.2+
 
 ## Build & Run / 构建运行
@@ -27,6 +28,26 @@ This is an iOS photo cleanup tool: swipe to decide quickly. Deletions are staged
 1. Open `PhotoSort.xcodeproj` in Xcode.
 2. Select a device (real device recommended for PhotoKit behavior).
 3. Build and Run.
+
+## macOS 本地相册分类
+
+1. 在 LM Studio 下载一个支持图片输入的模型。
+2. 在 Xcode 选择 `GlimpseMac` scheme 并运行。
+3. 授权 Apple Photos，选择相册、日期范围或最近 7/30/90 天。
+4. 分类完成后在照片网格中调整结果，确认后才会写入目标相册。
+
+App 默认连接 `http://127.0.0.1:1234/v1`，会在任务开始时通过 `lms` CLI 启动服务并加载模型。照片只发送给本机 LM Studio；仅当资源位于 iCloud 时，Photos 会先下载所需图片。
+
+Agent/CLI 控制入口：
+
+```bash
+swift run glimpse status --json
+swift run glimpse create-recent 7
+swift run glimpse continue <task-id>
+swift run glimpse review <task-id>
+```
+
+CLI 不能写入、删除或撤销相册变更；这些操作必须在 App 中确认。
 
 ## Notes / 说明
 
