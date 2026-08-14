@@ -16,6 +16,15 @@ enum PhotoClassificationTaskState: String, Codable, Hashable, Sendable {
     case applied
     case undone
     case failed
+
+    var canStartOrContinueInference: Bool {
+        switch self {
+        case .draft, .paused, .readyForReview, .failed:
+            true
+        case .running, .applying, .applied, .undone:
+            false
+        }
+    }
 }
 
 struct PhotoAlbumMutationRecord: Codable, Hashable, Sendable {
@@ -35,7 +44,7 @@ struct PhotoClassificationTask: Codable, Hashable, Identifiable, Sendable {
     let screenshotScheme: PhotoClassificationScheme
     var assetFingerprints: [PhotoClassificationFingerprint]
     var results: [PhotoClassificationResult]
-    var targetsByCategory: [String: PhotoAlbumTarget]
+    var targetsByCategory: [PhotoClassificationCategoryID: PhotoAlbumTarget]
     var approvedAssetIdentifiers: Set<String>
     var mutations: [PhotoAlbumMutationRecord]
     let createdAt: Date

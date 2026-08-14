@@ -104,7 +104,7 @@ actor LMStudioClient {
     ) async throws -> PhotoClassificationResponse {
         let categories = scheme.categories
             .filter(\.isEnabled)
-            .map { "\($0.id): \($0.name) — \($0.classificationDescription)" }
+            .map { "\($0.id.rawValue): \($0.name) — \($0.classificationDescription)" }
             .joined(separator: "\n")
         var taskText = """
         将图片归入且只能归入下面一个分类。如果无法可靠判断，category 返回 null。

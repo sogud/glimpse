@@ -39,6 +39,46 @@ final class LocalPhotoClassificationTests: XCTestCase {
             screenshots.categories.map(\.name),
             ["聊天社交", "文章知识", "工作学习", "订单票据", "购物商品", "地图行程", "娱乐梗图", "软件系统", "其他"]
         )
+        XCTAssertTrue(Set(ordinary.categories.map(\.id)).isDisjoint(with: screenshots.categories.map(\.id)))
+    }
+
+    func testSchemeMutationsIncrementTheVersionExactlyOnce() {
+        var scheme = PhotoClassificationScheme.ordinaryDefault
+        let category = PhotoClassificationCategory(
+            id: PhotoClassificationCategoryID(schemeKind: .ordinary, localIdentifier: "documents"),
+            name: "文档",
+            classificationDescription: "纸质文档",
+            isEnabled: true
+        )
+
+        scheme.appendCategory(category)
+
+        XCTAssertEqual(scheme.version, 2)
+        scheme.removeCategory(id: category.id)
+        XCTAssertEqual(scheme.version, 3)
+    }
+
+    func testLegacySchemeIdentifiersAreNamespacedOnce() {
+        var scheme = PhotoClassificationScheme(
+            id: UUID(),
+            name: "旧截图分类",
+            kind: .screenshot,
+            version: 4,
+            categories: [
+                PhotoClassificationCategory(
+                    id: "other",
+                    name: "其他",
+                    classificationDescription: "",
+                    isEnabled: true
+                )
+            ]
+        )
+
+        XCTAssertTrue(scheme.namespaceLegacyCategoryIdentifiers())
+        XCTAssertEqual(scheme.categories[0].id.rawValue, "screenshot:other")
+        XCTAssertEqual(scheme.version, 5)
+        XCTAssertFalse(scheme.namespaceLegacyCategoryIdentifiers())
+        XCTAssertEqual(scheme.version, 5)
     }
 
     func testContinuationSchedulesOnlyUnfinishedOrStaleAssets() {
@@ -49,6 +89,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
                 modificationDate: originalDate,
                 modelIdentifier: "vision-model",
                 analyzerVersion: 1,
+                schemeIdentifier: PhotoClassificationScheme.ordinaryDefault.id,
                 schemeVersion: 1
             ),
             PhotoClassificationFingerprint(
@@ -56,6 +97,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
                 modificationDate: originalDate.addingTimeInterval(10),
                 modelIdentifier: "vision-model",
                 analyzerVersion: 1,
+                schemeIdentifier: PhotoClassificationScheme.ordinaryDefault.id,
                 schemeVersion: 1
             ),
             PhotoClassificationFingerprint(
@@ -63,6 +105,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
                 modificationDate: nil,
                 modelIdentifier: "vision-model",
                 analyzerVersion: 1,
+                schemeIdentifier: PhotoClassificationScheme.ordinaryDefault.id,
                 schemeVersion: 1
             )
         ]
@@ -79,6 +122,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
                     modificationDate: originalDate,
                     modelIdentifier: "vision-model",
                     analyzerVersion: 1,
+                    schemeIdentifier: PhotoClassificationScheme.ordinaryDefault.id,
                     schemeVersion: 1
                 ),
                 categoryIdentifier: "pets",
@@ -95,12 +139,83 @@ final class LocalPhotoClassificationTests: XCTestCase {
         XCTAssertEqual(pending.map(\.assetIdentifier), ["changed", "unfinished"])
     }
 
+    func testCrossTaskCacheReusesOnlyAnExactSchemeFingerprint() {
+        let current = PhotoClassificationFingerprint(
+            assetIdentifier: "photo-1",
+            modificationDate: Date(timeIntervalSince1970: 100),
+            modelIdentifier: "vision-model",
+            analyzerVersion: 1,
+            schemeIdentifier: PhotoClassificationScheme.ordinaryDefault.id,
+            schemeVersion: 1
+        )
+        let matching = PhotoClassificationResult(
+            fingerprint: current,
+            categoryIdentifier: PhotoClassificationScheme.ordinaryDefault.categories[1].id,
+            reason: "猫",
+            reviewedCategoryIdentifier: PhotoClassificationScheme.ordinaryDefault.categories[2].id
+        )
+        let otherScheme = PhotoClassificationResult(
+            fingerprint: PhotoClassificationFingerprint(
+                assetIdentifier: "photo-1",
+                modificationDate: current.modificationDate,
+                modelIdentifier: "vision-model",
+                analyzerVersion: 1,
+                schemeIdentifier: PhotoClassificationScheme.screenshotDefault.id,
+                schemeVersion: 1
+            ),
+            categoryIdentifier: PhotoClassificationScheme.screenshotDefault.categories[0].id,
+            reason: "聊天",
+            reviewedCategoryIdentifier: nil
+        )
+
+        let reused = PhotoClassificationPlanner.reusableResults(
+            current: [current],
+            cached: [otherScheme, matching]
+        )
+
+        XCTAssertEqual(reused.count, 1)
+        XCTAssertEqual(reused[0].categoryIdentifier, matching.categoryIdentifier)
+        XCTAssertNil(reused[0].reviewedCategoryIdentifier)
+    }
+
+    func testAppliedTaskCannotStartInferenceAgain() {
+        XCTAssertTrue(PhotoClassificationTaskState.draft.canStartOrContinueInference)
+        XCTAssertTrue(PhotoClassificationTaskState.paused.canStartOrContinueInference)
+        XCTAssertTrue(PhotoClassificationTaskState.readyForReview.canStartOrContinueInference)
+        XCTAssertFalse(PhotoClassificationTaskState.applying.canStartOrContinueInference)
+        XCTAssertFalse(PhotoClassificationTaskState.applied.canStartOrContinueInference)
+        XCTAssertFalse(PhotoClassificationTaskState.undone.canStartOrContinueInference)
+    }
+
+    func testLegacyFingerprintWithoutSchemeIdentifierLoadsAsStale() throws {
+        let legacy = Data(
+            #"{"assetIdentifier":"photo-1","modelIdentifier":"vision-model","analyzerVersion":1,"schemeVersion":1}"#.utf8
+        )
+
+        let fingerprint = try JSONDecoder().decode(PhotoClassificationFingerprint.self, from: legacy)
+
+        XCTAssertNil(fingerprint.schemeIdentifier)
+    }
+
+    func testCategoryTargetDictionaryDecodesLegacyStringKeys() throws {
+        let legacyTargets: [String: PhotoAlbumTarget] = ["pets": .newAlbum(name: "宠物")]
+        let data = try JSONEncoder().encode(legacyTargets)
+
+        let targets = try JSONDecoder().decode(
+            [PhotoClassificationCategoryID: PhotoAlbumTarget].self,
+            from: data
+        )
+
+        XCTAssertEqual(targets["pets"], .newAlbum(name: "宠物"))
+    }
+
     func testApplyPlanUsesReviewedCategoryAndSkipsDisabledTargets() {
         let fingerprint = PhotoClassificationFingerprint(
             assetIdentifier: "photo-1",
             modificationDate: nil,
             modelIdentifier: "vision-model",
             analyzerVersion: 1,
+            schemeIdentifier: PhotoClassificationScheme.ordinaryDefault.id,
             schemeVersion: 1
         )
         let results = [
@@ -116,6 +231,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
                     modificationDate: nil,
                     modelIdentifier: "vision-model",
                     analyzerVersion: 1,
+                    schemeIdentifier: PhotoClassificationScheme.ordinaryDefault.id,
                     schemeVersion: 1
                 ),
                 categoryIdentifier: "pets",
@@ -156,7 +272,9 @@ final class LocalPhotoClassificationTests: XCTestCase {
             screenshotScheme: .screenshotDefault,
             assetFingerprints: [],
             results: [],
-            targetsByCategory: [:],
+            targetsByCategory: [
+                PhotoClassificationScheme.ordinaryDefault.categories[1].id: .newAlbum(name: "宠物")
+            ],
             approvedAssetIdentifiers: [],
             mutations: [],
             createdAt: Date(timeIntervalSince1970: 100),

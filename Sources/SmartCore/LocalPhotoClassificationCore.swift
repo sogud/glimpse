@@ -5,8 +5,55 @@ enum PhotoClassificationSchemeKind: String, Codable, Hashable, Sendable {
     case screenshot
 }
 
+struct PhotoClassificationCategoryID: RawRepresentable, Codable, Hashable, Sendable,
+    ExpressibleByStringLiteral, CodingKeyRepresentable {
+    let rawValue: String
+
+    init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    init(schemeKind: PhotoClassificationSchemeKind, localIdentifier: String) {
+        rawValue = "\(schemeKind.rawValue):\(localIdentifier)"
+    }
+
+    init(stringLiteral value: String) {
+        rawValue = value
+    }
+
+    init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    var codingKey: any CodingKey {
+        CategoryCodingKey(stringValue: rawValue)!
+    }
+
+    init?<Key>(codingKey: Key) where Key: CodingKey {
+        rawValue = codingKey.stringValue
+    }
+
+    private struct CategoryCodingKey: CodingKey {
+        let stringValue: String
+        let intValue: Int? = nil
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue: Int) {
+            return nil
+        }
+    }
+}
+
 struct PhotoClassificationCategory: Codable, Hashable, Identifiable, Sendable {
-    let id: String
+    let id: PhotoClassificationCategoryID
     var name: String
     var classificationDescription: String
     var isEnabled: Bool
@@ -25,14 +72,14 @@ struct PhotoClassificationScheme: Codable, Hashable, Identifiable, Sendable {
         kind: .ordinary,
         version: 1,
         categories: [
-            .init(id: "people", name: "人物与自拍", classificationDescription: "人物照、合照或自拍，不识别具体身份", isEnabled: true),
-            .init(id: "pets", name: "宠物", classificationDescription: "猫、狗及其他宠物是画面主体", isEnabled: true),
-            .init(id: "food", name: "美食", classificationDescription: "菜品、饮料或餐桌是画面主体", isEnabled: true),
-            .init(id: "travel", name: "旅行与地标", classificationDescription: "旅行记录、城市街景或明确地标", isEnabled: true),
-            .init(id: "nature", name: "自然风景", classificationDescription: "山水、海滩、天空、植物等自然景观", isEnabled: true),
-            .init(id: "work-study", name: "工作学习", classificationDescription: "白板、纸质资料、课堂或办公内容", isEnabled: true),
-            .init(id: "products", name: "商品物品", classificationDescription: "商品、设备或其他物品是画面主体", isEnabled: true),
-            .init(id: "other", name: "其他", classificationDescription: "不适合以上任何分类", isEnabled: true)
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "people"), name: "人物与自拍", classificationDescription: "人物照、合照或自拍，不识别具体身份", isEnabled: true),
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "pets"), name: "宠物", classificationDescription: "猫、狗及其他宠物是画面主体", isEnabled: true),
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "food"), name: "美食", classificationDescription: "菜品、饮料或餐桌是画面主体", isEnabled: true),
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "travel"), name: "旅行与地标", classificationDescription: "旅行记录、城市街景或明确地标", isEnabled: true),
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "nature"), name: "自然风景", classificationDescription: "山水、海滩、天空、植物等自然景观", isEnabled: true),
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "work-study"), name: "工作学习", classificationDescription: "白板、纸质资料、课堂或办公内容", isEnabled: true),
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "products"), name: "商品物品", classificationDescription: "商品、设备或其他物品是画面主体", isEnabled: true),
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "other"), name: "其他", classificationDescription: "不适合以上任何分类", isEnabled: true)
         ]
     )
 
@@ -42,17 +89,58 @@ struct PhotoClassificationScheme: Codable, Hashable, Identifiable, Sendable {
         kind: .screenshot,
         version: 1,
         categories: [
-            .init(id: "social", name: "聊天社交", classificationDescription: "聊天记录、社交动态或联系人内容", isEnabled: true),
-            .init(id: "knowledge", name: "文章知识", classificationDescription: "文章、教程、书摘或知识资料", isEnabled: true),
-            .init(id: "work-study", name: "工作学习", classificationDescription: "工作消息、文档、课程或学习资料", isEnabled: true),
-            .init(id: "orders", name: "订单票据", classificationDescription: "订单、支付、账单、发票或票据", isEnabled: true),
-            .init(id: "shopping", name: "购物商品", classificationDescription: "商品详情、比价或购物清单", isEnabled: true),
-            .init(id: "maps", name: "地图行程", classificationDescription: "地图、导航、车票、航班或行程", isEnabled: true),
-            .init(id: "entertainment", name: "娱乐梗图", classificationDescription: "影视、游戏、音乐、表情包或梗图", isEnabled: true),
-            .init(id: "software", name: "软件系统", classificationDescription: "软件界面、设置、报错或系统信息", isEnabled: true),
-            .init(id: "other", name: "其他", classificationDescription: "不适合以上任何分类", isEnabled: true)
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "social"), name: "聊天社交", classificationDescription: "聊天记录、社交动态或联系人内容", isEnabled: true),
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "knowledge"), name: "文章知识", classificationDescription: "文章、教程、书摘或知识资料", isEnabled: true),
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "work-study"), name: "工作学习", classificationDescription: "工作消息、文档、课程或学习资料", isEnabled: true),
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "orders"), name: "订单票据", classificationDescription: "订单、支付、账单、发票或票据", isEnabled: true),
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "shopping"), name: "购物商品", classificationDescription: "商品详情、比价或购物清单", isEnabled: true),
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "maps"), name: "地图行程", classificationDescription: "地图、导航、车票、航班或行程", isEnabled: true),
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "entertainment"), name: "娱乐梗图", classificationDescription: "影视、游戏、音乐、表情包或梗图", isEnabled: true),
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "software"), name: "软件系统", classificationDescription: "软件界面、设置、报错或系统信息", isEnabled: true),
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "other"), name: "其他", classificationDescription: "不适合以上任何分类", isEnabled: true)
         ]
     )
+
+    mutating func updateCategory(_ category: PhotoClassificationCategory) {
+        guard let index = categories.firstIndex(where: { $0.id == category.id }),
+              categories[index] != category else { return }
+        categories[index] = category
+        version += 1
+    }
+
+    mutating func appendCategory(_ category: PhotoClassificationCategory) {
+        guard !categories.contains(where: { $0.id == category.id }) else { return }
+        categories.append(category)
+        version += 1
+    }
+
+    mutating func removeCategory(id: PhotoClassificationCategoryID) {
+        guard categories.contains(where: { $0.id == id }) else { return }
+        categories.removeAll { $0.id == id }
+        version += 1
+    }
+
+    @discardableResult
+    mutating func namespaceLegacyCategoryIdentifiers() -> Bool {
+        var changed = false
+        categories = categories.map { category in
+            guard !category.id.rawValue.contains(":") else { return category }
+            changed = true
+            return PhotoClassificationCategory(
+                id: PhotoClassificationCategoryID(
+                    schemeKind: kind,
+                    localIdentifier: category.id.rawValue
+                ),
+                name: category.name,
+                classificationDescription: category.classificationDescription,
+                isEnabled: category.isEnabled
+            )
+        }
+        if changed {
+            version += 1
+        }
+        return changed
+    }
 }
 
 struct PhotoClassificationFingerprint: Codable, Hashable, Sendable {
@@ -60,18 +148,54 @@ struct PhotoClassificationFingerprint: Codable, Hashable, Sendable {
     let modificationDate: Date?
     let modelIdentifier: String
     let analyzerVersion: Int
+    let schemeIdentifier: UUID?
     let schemeVersion: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case assetIdentifier
+        case modificationDate
+        case modelIdentifier
+        case analyzerVersion
+        case schemeIdentifier
+        case schemeVersion
+    }
+
+    init(
+        assetIdentifier: String,
+        modificationDate: Date?,
+        modelIdentifier: String,
+        analyzerVersion: Int,
+        schemeIdentifier: UUID?,
+        schemeVersion: Int
+    ) {
+        self.assetIdentifier = assetIdentifier
+        self.modificationDate = modificationDate
+        self.modelIdentifier = modelIdentifier
+        self.analyzerVersion = analyzerVersion
+        self.schemeIdentifier = schemeIdentifier
+        self.schemeVersion = schemeVersion
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        assetIdentifier = try container.decode(String.self, forKey: .assetIdentifier)
+        modificationDate = try container.decodeIfPresent(Date.self, forKey: .modificationDate)
+        modelIdentifier = try container.decode(String.self, forKey: .modelIdentifier)
+        analyzerVersion = try container.decode(Int.self, forKey: .analyzerVersion)
+        schemeIdentifier = try container.decodeIfPresent(UUID.self, forKey: .schemeIdentifier)
+        schemeVersion = try container.decode(Int.self, forKey: .schemeVersion)
+    }
 }
 
 struct PhotoClassificationResult: Codable, Hashable, Identifiable, Sendable {
     let fingerprint: PhotoClassificationFingerprint
-    let categoryIdentifier: String?
+    let categoryIdentifier: PhotoClassificationCategoryID?
     let reason: String
-    var reviewedCategoryIdentifier: String?
+    var reviewedCategoryIdentifier: PhotoClassificationCategoryID?
 
     var id: String { fingerprint.assetIdentifier }
 
-    var effectiveCategoryIdentifier: String? {
+    var effectiveCategoryIdentifier: PhotoClassificationCategoryID? {
         reviewedCategoryIdentifier ?? categoryIdentifier
     }
 }
@@ -88,6 +212,25 @@ enum PhotoClassificationPlanner {
             cachedByIdentifier[fingerprint.assetIdentifier]?.fingerprint != fingerprint
         }
     }
+
+    static func reusableResults(
+        current: [PhotoClassificationFingerprint],
+        cached: [PhotoClassificationResult]
+    ) -> [PhotoClassificationResult] {
+        let cachedByFingerprint = cached.reduce(into: [PhotoClassificationFingerprint: PhotoClassificationResult]()) {
+            result, cachedResult in
+            result[cachedResult.fingerprint] = result[cachedResult.fingerprint] ?? cachedResult
+        }
+        return current.compactMap { fingerprint in
+            guard let cachedResult = cachedByFingerprint[fingerprint] else { return nil }
+            return PhotoClassificationResult(
+                fingerprint: fingerprint,
+                categoryIdentifier: cachedResult.categoryIdentifier,
+                reason: cachedResult.reason,
+                reviewedCategoryIdentifier: nil
+            )
+        }
+    }
 }
 
 enum PhotoAlbumTarget: Codable, Hashable, Sendable {
@@ -98,7 +241,7 @@ enum PhotoAlbumTarget: Codable, Hashable, Sendable {
 
 struct PhotoAlbumAddition: Codable, Hashable, Sendable {
     let assetIdentifier: String
-    let categoryIdentifier: String
+    let categoryIdentifier: PhotoClassificationCategoryID
     let target: PhotoAlbumTarget
 }
 
@@ -106,7 +249,7 @@ enum PhotoAlbumMutationPlanner {
     static func additions(
         results: [PhotoClassificationResult],
         approvedAssetIdentifiers: Set<String>,
-        targetsByCategory: [String: PhotoAlbumTarget]
+        targetsByCategory: [PhotoClassificationCategoryID: PhotoAlbumTarget]
     ) -> [PhotoAlbumAddition] {
         results.compactMap { result in
             guard approvedAssetIdentifiers.contains(result.id),
@@ -125,7 +268,7 @@ enum PhotoAlbumMutationPlanner {
 }
 
 struct PhotoClassificationResponse: Codable, Equatable, Sendable {
-    let categoryIdentifier: String?
+    let categoryIdentifier: PhotoClassificationCategoryID?
     let reason: String
 
     private enum CodingKeys: String, CodingKey {
@@ -135,13 +278,13 @@ struct PhotoClassificationResponse: Codable, Equatable, Sendable {
 }
 
 enum PhotoClassificationResponseError: LocalizedError, Equatable {
-    case unknownCategory(String)
+    case unknownCategory(PhotoClassificationCategoryID)
     case emptyReason
 
     var errorDescription: String? {
         switch self {
         case .unknownCategory(let identifier):
-            return "模型返回了未启用的分类：\(identifier)"
+            return "模型返回了未启用的分类：\(identifier.rawValue)"
         case .emptyReason:
             return "模型没有提供分类理由"
         }
@@ -149,9 +292,9 @@ enum PhotoClassificationResponseError: LocalizedError, Equatable {
 }
 
 struct PhotoClassificationResponseDecoder: Sendable {
-    let allowedCategoryIdentifiers: Set<String>
+    let allowedCategoryIdentifiers: Set<PhotoClassificationCategoryID>
 
-    init(allowedCategoryIdentifiers: Set<String>) {
+    init(allowedCategoryIdentifiers: Set<PhotoClassificationCategoryID>) {
         self.allowedCategoryIdentifiers = allowedCategoryIdentifiers
     }
 

@@ -103,11 +103,14 @@ final class PhotoClassificationCoordinator: ObservableObject {
                     modificationDate: asset.modificationDate,
                     modelIdentifier: modelIdentifier,
                     analyzerVersion: 1,
+                    schemeIdentifier: isScreenshot(asset) ? screenshotScheme.id : ordinaryScheme.id,
                     schemeVersion: isScreenshot(asset) ? screenshotScheme.version : ordinaryScheme.version
                 )
             }
             let categories = ordinaryScheme.categories + screenshotScheme.categories
-            let targets = categories.reduce(into: [String: PhotoAlbumTarget]()) { result, category in
+            let targets = categories.reduce(
+                into: [PhotoClassificationCategoryID: PhotoAlbumTarget]()
+            ) { result, category in
                 guard category.isEnabled, result[category.id] == nil else { return }
                 result[category.id] = .newAlbum(name: category.name)
             }
@@ -147,7 +150,8 @@ final class PhotoClassificationCoordinator: ObservableObject {
     }
 
     func startOrContinue(taskID: UUID) {
-        guard activeTask == nil else { return }
+        guard activeTask == nil,
+              tasks.first(where: { $0.id == taskID })?.state.canStartOrContinueInference == true else { return }
         activeTask = Task { [weak self] in
             await self?.run(taskID: taskID)
             self?.activeTask = nil
@@ -179,7 +183,11 @@ final class PhotoClassificationCoordinator: ObservableObject {
         }
     }
 
-    func updateCategory(taskID: UUID, assetIdentifier: String, categoryIdentifier: String?) {
+    func updateCategory(
+        taskID: UUID,
+        assetIdentifier: String,
+        categoryIdentifier: PhotoClassificationCategoryID?
+    ) {
         updateTask(id: taskID) { task in
             guard let index = task.results.firstIndex(where: { $0.id == assetIdentifier }) else { return }
             task.results[index].reviewedCategoryIdentifier = categoryIdentifier
@@ -201,7 +209,11 @@ final class PhotoClassificationCoordinator: ObservableObject {
         }
     }
 
-    func setTarget(taskID: UUID, categoryIdentifier: String, target: PhotoAlbumTarget) {
+    func setTarget(
+        taskID: UUID,
+        categoryIdentifier: PhotoClassificationCategoryID,
+        target: PhotoAlbumTarget
+    ) {
         updateTask(id: taskID) { task in
             task.targetsByCategory[categoryIdentifier] = target
         }
@@ -259,6 +271,33 @@ final class PhotoClassificationCoordinator: ObservableObject {
         }
     }
 
+    func updateSavedCategory(
+        schemeKind: PhotoClassificationSchemeKind,
+        category: PhotoClassificationCategory
+    ) {
+        mutateSavedScheme(kind: schemeKind) { $0.updateCategory(category) }
+    }
+
+    func addSavedCategory(schemeKind: PhotoClassificationSchemeKind) {
+        let category = PhotoClassificationCategory(
+            id: PhotoClassificationCategoryID(
+                schemeKind: schemeKind,
+                localIdentifier: UUID().uuidString.lowercased()
+            ),
+            name: "新分类",
+            classificationDescription: "",
+            isEnabled: true
+        )
+        mutateSavedScheme(kind: schemeKind) { $0.appendCategory(category) }
+    }
+
+    func removeSavedCategory(
+        schemeKind: PhotoClassificationSchemeKind,
+        categoryIdentifier: PhotoClassificationCategoryID
+    ) {
+        mutateSavedScheme(kind: schemeKind) { $0.removeCategory(id: categoryIdentifier) }
+    }
+
     func thumbnail(assetIdentifier: String, longestEdge: CGFloat = 320) async -> NSImage? {
         guard let asset = photoLibrary.assets(localIdentifiers: [assetIdentifier])[assetIdentifier] else {
             return nil
@@ -267,7 +306,8 @@ final class PhotoClassificationCoordinator: ObservableObject {
     }
 
     private func run(taskID: UUID) async {
-        guard var task = tasks.first(where: { $0.id == taskID }) else { return }
+        guard var task = tasks.first(where: { $0.id == taskID }),
+              task.state.canStartOrContinueInference else { return }
         updateTask(id: taskID) { $0.state = .running }
         let activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .idleSystemSleepDisabled],
@@ -285,6 +325,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
                     modificationDate: asset.modificationDate,
                     modelIdentifier: task.modelIdentifier,
                     analyzerVersion: 1,
+                    schemeIdentifier: isScreenshot(asset) ? task.screenshotScheme.id : task.ordinaryScheme.id,
                     schemeVersion: isScreenshot(asset) ? task.screenshotScheme.version : task.ordinaryScheme.version
                 )
             }
@@ -293,6 +334,24 @@ final class PhotoClassificationCoordinator: ObservableObject {
             task.results.removeAll { !currentIdentifiers.contains($0.id) }
             task.approvedAssetIdentifiers.formIntersection(currentIdentifiers)
             task.updatedAt = Date()
+            let cachedResults = try taskStore.tasks().flatMap(\.results)
+            let existingFingerprints = Set(task.results.map(\.fingerprint))
+            let reusableResults = PhotoClassificationPlanner.reusableResults(
+                current: currentFingerprints.filter { !existingFingerprints.contains($0) },
+                cached: cachedResults
+            )
+            for result in reusableResults {
+                if let index = task.results.firstIndex(where: { $0.id == result.id }) {
+                    task.results[index] = result
+                } else {
+                    task.results.append(result)
+                }
+                if result.categoryIdentifier == nil {
+                    task.approvedAssetIdentifiers.remove(result.id)
+                } else {
+                    task.approvedAssetIdentifiers.insert(result.id)
+                }
+            }
             try taskStore.save(task)
             upsert(task)
             let pending = PhotoClassificationPlanner.assetsRequiringClassification(
@@ -326,6 +385,8 @@ final class PhotoClassificationCoordinator: ObservableObject {
                 }
                 if result.categoryIdentifier != nil {
                     task.approvedAssetIdentifiers.insert(result.id)
+                } else {
+                    task.approvedAssetIdentifiers.remove(result.id)
                 }
                 task.updatedAt = Date()
                 try taskStore.save(task)
@@ -439,11 +500,31 @@ final class PhotoClassificationCoordinator: ObservableObject {
 
     private static func savedScheme(forKey key: String) -> PhotoClassificationScheme? {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-        return try? JSONDecoder().decode(PhotoClassificationScheme.self, from: data)
+        guard var scheme = try? JSONDecoder().decode(PhotoClassificationScheme.self, from: data) else {
+            return nil
+        }
+        if scheme.namespaceLegacyCategoryIdentifiers() {
+            saveScheme(scheme, forKey: key)
+        }
+        return scheme
     }
 
     private static func saveScheme(_ scheme: PhotoClassificationScheme, forKey key: String) {
         UserDefaults.standard.set(try? JSONEncoder().encode(scheme), forKey: key)
+    }
+
+    private func mutateSavedScheme(
+        kind: PhotoClassificationSchemeKind,
+        mutation: (inout PhotoClassificationScheme) -> Void
+    ) {
+        switch kind {
+        case .ordinary:
+            mutation(&savedOrdinaryScheme)
+            Self.saveScheme(savedOrdinaryScheme, forKey: "ordinaryClassificationScheme")
+        case .screenshot:
+            mutation(&savedScreenshotScheme)
+            Self.saveScheme(savedScreenshotScheme, forKey: "screenshotClassificationScheme")
+        }
     }
 
     private func startControlInbox() {

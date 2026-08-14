@@ -185,8 +185,18 @@ private struct NewClassificationTaskView: View {
                     .foregroundStyle(.secondary)
             }
 
-            ClassificationSchemeEditor(scheme: $coordinator.savedOrdinaryScheme)
-            ClassificationSchemeEditor(scheme: $coordinator.savedScreenshotScheme)
+            ClassificationSchemeEditor(
+                scheme: coordinator.savedOrdinaryScheme,
+                onUpdate: { coordinator.updateSavedCategory(schemeKind: .ordinary, category: $0) },
+                onDelete: { coordinator.removeSavedCategory(schemeKind: .ordinary, categoryIdentifier: $0) },
+                onAdd: { coordinator.addSavedCategory(schemeKind: .ordinary) }
+            )
+            ClassificationSchemeEditor(
+                scheme: coordinator.savedScreenshotScheme,
+                onUpdate: { coordinator.updateSavedCategory(schemeKind: .screenshot, category: $0) },
+                onDelete: { coordinator.removeSavedCategory(schemeKind: .screenshot, categoryIdentifier: $0) },
+                onAdd: { coordinator.addSavedCategory(schemeKind: .screenshot) }
+            )
 
             Section {
                 HStack {
@@ -211,8 +221,6 @@ private struct NewClassificationTaskView: View {
         .formStyle(.grouped)
         .navigationTitle("新建分类任务")
         .padding(.horizontal, 24)
-        .onChange(of: coordinator.savedOrdinaryScheme) { _, _ in coordinator.persistSchemePreferences() }
-        .onChange(of: coordinator.savedScreenshotScheme) { _, _ in coordinator.persistSchemePreferences() }
         .onChange(of: coordinator.preferredModelIdentifier) { _, _ in coordinator.persistSchemePreferences() }
     }
 
@@ -235,41 +243,68 @@ private struct NewClassificationTaskView: View {
 }
 
 private struct ClassificationSchemeEditor: View {
-    @Binding var scheme: PhotoClassificationScheme
+    let scheme: PhotoClassificationScheme
+    let onUpdate: (PhotoClassificationCategory) -> Void
+    let onDelete: (PhotoClassificationCategoryID) -> Void
+    let onAdd: () -> Void
 
     var body: some View {
         Section(scheme.name) {
-            ForEach($scheme.categories) { $category in
-                HStack(alignment: .top) {
-                    Toggle("", isOn: $category.isEnabled)
-                        .labelsHidden()
-                    VStack {
-                        TextField("分类名称", text: $category.name)
-                        TextField("判断说明", text: $category.classificationDescription)
-                            .font(.caption)
-                    }
-                    Button(role: .destructive) {
-                        scheme.categories.removeAll { $0.id == category.id }
-                        scheme.version += 1
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.plain)
-                }
+            ForEach(scheme.categories) { category in
+                ClassificationCategoryEditorRow(
+                    category: category,
+                    onUpdate: onUpdate,
+                    onDelete: { onDelete(category.id) }
+                )
             }
-            Button("新增分类", systemImage: "plus") {
-                scheme.categories.append(
-                    PhotoClassificationCategory(
-                        id: UUID().uuidString.lowercased(),
-                        name: "新分类",
-                        classificationDescription: "",
-                        isEnabled: true
+            Button("新增分类", systemImage: "plus", action: onAdd)
+        }
+    }
+}
+
+private struct ClassificationCategoryEditorRow: View {
+    let category: PhotoClassificationCategory
+    let onUpdate: (PhotoClassificationCategory) -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top) {
+            Toggle(
+                "",
+                isOn: Binding(
+                    get: { category.isEnabled },
+                    set: { newValue in update { $0.isEnabled = newValue } }
+                )
+            )
+            .labelsHidden()
+            VStack {
+                TextField(
+                    "分类名称",
+                    text: Binding(
+                        get: { category.name },
+                        set: { newValue in update { $0.name = newValue } }
                     )
                 )
-                scheme.version += 1
+                TextField(
+                    "判断说明",
+                    text: Binding(
+                        get: { category.classificationDescription },
+                        set: { newValue in update { $0.classificationDescription = newValue } }
+                    )
+                )
+                .font(.caption)
             }
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.plain)
         }
-        .onChange(of: scheme.categories) { _, _ in scheme.version += 1 }
+    }
+
+    private func update(_ mutation: (inout PhotoClassificationCategory) -> Void) {
+        var updated = category
+        mutation(&updated)
+        onUpdate(updated)
     }
 }
 
@@ -321,10 +356,11 @@ private struct ClassificationReviewView: View {
     @State private var confirmingApply = false
     @State private var confirmingUndo = false
 
-    private var categories: [PhotoClassificationCategory] {
-        var seen = Set<String>()
-        return (task.ordinaryScheme.categories + task.screenshotScheme.categories).filter {
-            $0.isEnabled && seen.insert($0.id).inserted
+    private var categories: [ReviewCategory] {
+        task.ordinaryScheme.categories.filter(\.isEnabled).map {
+            ReviewCategory(schemeName: task.ordinaryScheme.name, category: $0)
+        } + task.screenshotScheme.categories.filter(\.isEnabled).map {
+            ReviewCategory(schemeName: task.screenshotScheme.name, category: $0)
         }
     }
 
@@ -360,7 +396,7 @@ private struct ClassificationReviewView: View {
                         Text("已选择 \(selectedAssets.count) 张")
                         Menu("移动到分类") {
                             ForEach(categories) { category in
-                                Button(category.name) {
+                                Button(category.displayName) {
                                     moveSelected(to: category.id)
                                 }
                             }
@@ -378,7 +414,7 @@ private struct ClassificationReviewView: View {
                     ClassificationGroupSection(
                         task: task,
                         categoryIdentifier: category.id,
-                        title: category.name,
+                        title: category.displayName,
                         results: task.results.filter { $0.effectiveCategoryIdentifier == category.id },
                         categories: categories,
                         selectedAssets: $selectedAssets,
@@ -421,7 +457,7 @@ private struct ClassificationReviewView: View {
         .onChange(of: task.id) { _, _ in selectedAssets.removeAll() }
     }
 
-    private func moveSelected(to categoryIdentifier: String?) {
+    private func moveSelected(to categoryIdentifier: PhotoClassificationCategoryID?) {
         for assetIdentifier in selectedAssets {
             coordinator.updateCategory(
                 taskID: task.id,
@@ -436,14 +472,14 @@ private struct ClassificationReviewView: View {
 private struct TargetAlbumMappingView: View {
     @EnvironmentObject private var coordinator: PhotoClassificationCoordinator
     let task: PhotoClassificationTask
-    let categories: [PhotoClassificationCategory]
+    let categories: [ReviewCategory]
 
     var body: some View {
         DisclosureGroup("目标相册映射") {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
                 ForEach(categories) { category in
                     GridRow {
-                        Text(category.name)
+                        Text(category.displayName)
                         Picker(
                             "",
                             selection: Binding(
@@ -451,7 +487,9 @@ private struct TargetAlbumMappingView: View {
                                 set: { coordinator.setTarget(taskID: task.id, categoryIdentifier: category.id, target: $0) }
                             )
                         ) {
-                            Text("新建“\(category.name)”").tag(PhotoAlbumTarget.newAlbum(name: category.name))
+                            Text("新建“\(category.category.name)”").tag(
+                                PhotoAlbumTarget.newAlbum(name: category.category.name)
+                            )
                             ForEach(coordinator.albums) { album in
                                 Text("已有：\(album.name)").tag(
                                     PhotoAlbumTarget.existingAlbum(identifier: album.id, name: album.name)
@@ -475,10 +513,10 @@ private struct TargetAlbumMappingView: View {
 private struct ClassificationGroupSection: View {
     @EnvironmentObject private var coordinator: PhotoClassificationCoordinator
     let task: PhotoClassificationTask
-    let categoryIdentifier: String?
+    let categoryIdentifier: PhotoClassificationCategoryID?
     let title: String
     let results: [PhotoClassificationResult]
-    let categories: [PhotoClassificationCategory]
+    let categories: [ReviewCategory]
     @Binding var selectedAssets: Set<String>
     @Binding var inspectedResult: PhotoClassificationResult?
 
@@ -531,7 +569,7 @@ private struct PhotoClassificationCard: View {
     @EnvironmentObject private var coordinator: PhotoClassificationCoordinator
     let task: PhotoClassificationTask
     let result: PhotoClassificationResult
-    let categories: [PhotoClassificationCategory]
+    let categories: [ReviewCategory]
     let isSelected: Bool
     let onToggleSelection: () -> Void
     let onInspect: () -> Void
@@ -562,7 +600,7 @@ private struct PhotoClassificationCard: View {
             )) {
                 Text("待分类").tag(String?.none)
                 ForEach(categories) { category in
-                    Text(category.name).tag(Optional(category.id))
+                    Text(category.displayName).tag(Optional(category.id))
                 }
             }
             .labelsHidden()
@@ -577,7 +615,7 @@ private struct PhotoClassificationInspector: View {
     @Environment(\.dismiss) private var dismiss
     let task: PhotoClassificationTask
     let result: PhotoClassificationResult
-    let categories: [PhotoClassificationCategory]
+    let categories: [ReviewCategory]
 
     var body: some View {
         VStack(spacing: 16) {
@@ -595,7 +633,7 @@ private struct PhotoClassificationInspector: View {
             )) {
                 Text("待分类").tag(String?.none)
                 ForEach(categories) { category in
-                    Text(category.name).tag(Optional(category.id))
+                    Text(category.displayName).tag(Optional(category.id))
                 }
             }
             .frame(maxWidth: 320)
@@ -603,6 +641,14 @@ private struct PhotoClassificationInspector: View {
         .padding(24)
         .frame(minWidth: 760, minHeight: 620)
     }
+}
+
+private struct ReviewCategory: Identifiable {
+    let schemeName: String
+    let category: PhotoClassificationCategory
+
+    var id: PhotoClassificationCategoryID { category.id }
+    var displayName: String { "\(schemeName) · \(category.name)" }
 }
 
 private struct AsyncPhotoThumbnail: View {
