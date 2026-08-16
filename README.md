@@ -29,25 +29,25 @@ This is an iOS photo cleanup tool: swipe to decide quickly. Deletions are staged
 2. Select a device (real device recommended for PhotoKit behavior).
 3. Build and Run.
 
-## macOS 本地相册分类
+## macOS Photos CLI 本地分类
 
-1. 在 LM Studio 下载一个支持图片输入的模型。
-2. 在 Xcode 选择 `GlimpseMac` scheme 并运行。
-3. 授权 Apple Photos，选择相册、日期范围或最近 7/30/90 天。
-4. 分类完成后在照片网格中调整结果，确认后才会写入目标相册。
-
-App 默认连接 `http://127.0.0.1:1234/v1`，会在任务开始时通过 `lms` CLI 启动服务并加载模型。照片只发送给本机 LM Studio；仅当资源位于 iCloud 时，Photos 会先下载所需图片。
-
-Agent/CLI 控制入口：
+不需要 Xcode。自动从上次进度继续处理下一批最多 10 张静态照片：
 
 ```bash
-swift run glimpse status --json
-swift run glimpse create-recent 7
-swift run glimpse continue <task-id>
-swift run glimpse review <task-id>
+swift run glimpse photos classify-next --limit 10
 ```
 
-CLI 不能写入、删除或撤销相册变更；这些操作必须在 App 中确认。
+如需只分析手动选择的照片，使用 `classify-selection`。
+
+CLI 默认连接已运行的 `http://127.0.0.1:1234/v1`，自动选择 Qwen3-VL 等已加载视觉模型。每张照片只发送一次分类请求，由同一次响应确定普通照片/截图及具体分类。它会临时导出最长边 1024 px 的 JPEG 给本机 LM Studio，完成后删除临时文件，并把分类计划保存到 `~/Library/Application Support/Glimpse/Plans/`。分析阶段不会修改 Photos。
+
+检查终端输出或计划 JSON 后，再显式应用：
+
+```bash
+swift run glimpse photos apply "<plan.json>"
+```
+
+首次运行时允许终端控制「照片」。批次进度按 Photos 的稳定资源 ID 保存，不受图库顺序变化影响；视频和 Photos 无法导出的项目会安全跳过，单张识别失败会重试，连续失败三次后停止自动重试并留在计划中待人工确认。应用后，原照片不会删除或移动，只会加入 `Glimpse` 文件夹下的“普通照片·分类”或“截图·分类”相册。模型可把明显误拍、严重失焦、空白或无信息价值的图片建议到统一的 `Glimpse/待删除` 相册，但 CLI 不提供删除照片的命令。
 
 ## Notes / 说明
 

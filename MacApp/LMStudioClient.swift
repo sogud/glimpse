@@ -14,6 +14,7 @@ enum LMStudioError: LocalizedError {
     case commandFailed(String)
     case noVisionModel
     case invalidResponse
+    case structuredOutputUnsupported
     case server(String)
 
     var errorDescription: String? {
@@ -28,6 +29,8 @@ enum LMStudioError: LocalizedError {
             return "没有找到支持图片输入的本地模型"
         case .invalidResponse:
             return "LM Studio 返回了无法识别的结果"
+        case .structuredOutputUnsupported:
+            return "当前模型不支持结构化输出"
         case .server(let message):
             return message
         }
@@ -35,6 +38,8 @@ enum LMStudioError: LocalizedError {
 }
 
 actor LMStudioClient {
+    private static let inferenceContextLength = 8_192
+
     private struct ModelsResponse: Decodable {
         struct Model: Decodable {
             let id: String
@@ -89,8 +94,9 @@ actor LMStudioClient {
             _ = try await runLMS([
                 "load", modelIdentifier,
                 "-y",
+                "--identifier", modelIdentifier,
                 "--parallel", "1",
-                "--context-length", "4096"
+                "--context-length", String(Self.inferenceContextLength)
             ])
             _ = try await waitForServer(expectedModel: modelIdentifier)
         }
@@ -102,8 +108,8 @@ actor LMStudioClient {
         scheme: PhotoClassificationScheme,
         modelIdentifier: String
     ) async throws -> PhotoClassificationResponse {
-        let categories = scheme.categories
-            .filter(\.isEnabled)
+        let enabledCategories = scheme.categories.filter(\.isEnabled)
+        let categories = enabledCategories
             .map { "\($0.id.rawValue): \($0.name) — \($0.classificationDescription)" }
             .joined(separator: "\n")
         var taskText = """
@@ -123,6 +129,8 @@ actor LMStudioClient {
             "model": modelIdentifier,
             "temperature": 0,
             "max_tokens": 160,
+            "stream": false,
+            "response_format": responseFormat(for: enabledCategories),
             "messages": [
                 [
                     "role": "system",
@@ -140,6 +148,24 @@ actor LMStudioClient {
                 ]
             ]
         ]
+        let content: String
+        do {
+            content = try await chatContent(body: body)
+        } catch LMStudioError.structuredOutputUnsupported {
+            var fallbackBody = body
+            fallbackBody.removeValue(forKey: "response_format")
+            content = try await chatContent(body: fallbackBody)
+        }
+        let normalized = content
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return try PhotoClassificationResponseDecoder(
+            allowedCategoryIdentifiers: Set(enabledCategories.map(\.id))
+        ).decode(normalized)
+    }
+
+    private func chatContent(body: [String: Any]) async throws -> String {
         var request = URLRequest(url: endpoint.appendingPathComponent("chat/completions"))
         request.httpMethod = "POST"
         request.timeoutInterval = 120
@@ -147,17 +173,39 @@ actor LMStudioClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+        try validate(
+            response: response,
+            data: data,
+            allowsStructuredOutputFallback: body["response_format"] != nil
+        )
         guard let content = try JSONDecoder().decode(ChatResponse.self, from: data).choices.first?.message.content else {
             throw LMStudioError.invalidResponse
         }
-        let normalized = content
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return try PhotoClassificationResponseDecoder(
-            allowedCategoryIdentifiers: Set(scheme.categories.filter(\.isEnabled).map(\.id))
-        ).decode(normalized)
+        return content
+    }
+
+    private func responseFormat(for categories: [PhotoClassificationCategory]) -> [String: Any] {
+        let categoryIdentifiers: [Any] = categories.map { $0.id.rawValue } + [NSNull()]
+        return [
+            "type": "json_schema",
+            "json_schema": [
+                "name": "photo_classification",
+                "strict": true,
+                "schema": [
+                    "type": "object",
+                    "properties": [
+                        "category": [
+                            "enum": categoryIdentifiers
+                        ],
+                        "reason": [
+                            "type": "string"
+                        ]
+                    ],
+                    "required": ["category", "reason"],
+                    "additionalProperties": false
+                ]
+            ]
+        ]
     }
 
     private func waitForServer(expectedModel: String? = nil) async throws -> [String] {
@@ -200,8 +248,18 @@ actor LMStudioClient {
         }
     }
 
-    private func validate(response: URLResponse, data: Data) throws {
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+    private func validate(
+        response: URLResponse,
+        data: Data,
+        allowsStructuredOutputFallback: Bool = false
+    ) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw LMStudioError.invalidResponse
+        }
+        guard 200..<300 ~= http.statusCode else {
+            if allowsStructuredOutputFallback && (http.statusCode == 400 || http.statusCode == 422) {
+                throw LMStudioError.structuredOutputUnsupported
+            }
             let message = String(data: data, encoding: .utf8) ?? "LM Studio 请求失败"
             throw LMStudioError.server(message)
         }

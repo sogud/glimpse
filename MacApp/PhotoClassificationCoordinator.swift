@@ -6,6 +6,8 @@ import UserNotifications
 
 @MainActor
 final class PhotoClassificationCoordinator: ObservableObject {
+    private static let classificationAnalyzerVersion = 2
+
     @Published private(set) var tasks: [PhotoClassificationTask] = []
     @Published private(set) var albums: [PhotoAlbumDescriptor] = []
     @Published private(set) var visionModels: [LMStudioModelDescriptor] = []
@@ -102,7 +104,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
                     assetIdentifier: asset.localIdentifier,
                     modificationDate: asset.modificationDate,
                     modelIdentifier: modelIdentifier,
-                    analyzerVersion: 1,
+                    analyzerVersion: Self.classificationAnalyzerVersion,
                     schemeIdentifier: isScreenshot(asset) ? screenshotScheme.id : ordinaryScheme.id,
                     schemeVersion: isScreenshot(asset) ? screenshotScheme.version : ordinaryScheme.version
                 )
@@ -324,7 +326,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
                     assetIdentifier: asset.localIdentifier,
                     modificationDate: asset.modificationDate,
                     modelIdentifier: task.modelIdentifier,
-                    analyzerVersion: 1,
+                    analyzerVersion: Self.classificationAnalyzerVersion,
                     schemeIdentifier: isScreenshot(asset) ? task.screenshotScheme.id : task.ordinaryScheme.id,
                     schemeVersion: isScreenshot(asset) ? task.screenshotScheme.version : task.ordinaryScheme.version
                 )

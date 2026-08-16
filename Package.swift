@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .library(name: "PhotoSortSessionCore", targets: ["PhotoSortSessionCore"]),
         .library(name: "PhotoSortSmartCore", targets: ["PhotoSortSmartCore"]),
+        .library(name: "GlimpsePhotosCLIKit", targets: ["GlimpsePhotosCLIKit"]),
         .executable(name: "glimpse", targets: ["GlimpseCLI"])
     ],
     targets: [
@@ -39,9 +40,18 @@ let package = Package(
             dependencies: ["PhotoSortSmartCore"],
             path: "Tests/PhotoSortSmartCoreTests"
         ),
+        .target(
+            name: "GlimpsePhotosCLIKit",
+            path: "Sources/PhotosCLIKit"
+        ),
+        .executableTarget(
+            name: "GlimpsePhotosCLIChecks",
+            dependencies: ["GlimpsePhotosCLIKit"],
+            path: "Tests/GlimpsePhotosCLIKitTests"
+        ),
         .executableTarget(
             name: "GlimpseCLI",
-            dependencies: ["PhotoSortSmartCore"],
+            dependencies: ["GlimpsePhotosCLIKit"],
             path: "CLI"
         )
     ]
