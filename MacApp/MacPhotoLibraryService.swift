@@ -35,6 +35,13 @@ final class MacPhotoLibraryService {
         await PHPhotoLibrary.requestAuthorization(for: .readWrite)
     }
 
+    func accessiblePhotoCount() throws -> Int {
+        try requireAuthorization()
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        return PHAsset.fetchAssets(with: options).count
+    }
+
     func albums() throws -> [PhotoAlbumDescriptor] {
         try requireAuthorization()
         let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)

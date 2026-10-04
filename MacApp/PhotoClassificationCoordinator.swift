@@ -30,20 +30,16 @@ final class PhotoClassificationCoordinator: ObservableObject {
     private var activeMutationTaskID: UUID?
     private var hasBootstrapped = false
 
-    convenience init() {
-        self.init(container: PhotoSortDataContainer.shared)
-    }
-
     init(container: ModelContainer) {
         let defaults = UserDefaults.standard
         let defaultEndpoint = "http://127.0.0.1:1234/v1"
-        let savedEndpoint = defaults.string(forKey: "lmStudioEndpoint") ?? defaultEndpoint
+        let savedEndpoint = defaults.string(forKey: "nativeModelEndpoint") ?? defaultEndpoint
         let endpointURL = URL(string: savedEndpoint)
         let client = endpointURL.flatMap { try? LMStudioClient(endpoint: $0) }
         endpointText = client == nil ? defaultEndpoint : savedEndpoint
-        preferredModelIdentifier = defaults.string(forKey: "lmStudioModel") ?? ""
-        savedOrdinaryScheme = Self.savedScheme(forKey: "ordinaryClassificationScheme") ?? .ordinaryDefault
-        savedScreenshotScheme = Self.savedScheme(forKey: "screenshotClassificationScheme") ?? .screenshotDefault
+        preferredModelIdentifier = defaults.string(forKey: "nativeModelIdentifier") ?? ""
+        savedOrdinaryScheme = Self.savedScheme(forKey: "nativeOrdinaryScheme") ?? .ordinaryDefault
+        savedScreenshotScheme = Self.savedScheme(forKey: "nativeScreenshotScheme") ?? .screenshotDefault
         taskStore = PhotoClassificationTaskStore(container: container)
         lmStudio = client ?? (try! LMStudioClient(endpoint: URL(string: defaultEndpoint)!))
         authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -56,10 +52,6 @@ final class PhotoClassificationCoordinator: ObservableObject {
     var selectedTask: PhotoClassificationTask? {
         guard let selectedTaskID else { return nil }
         return tasks.first(where: { $0.id == selectedTaskID })
-    }
-
-    var runningTask: PhotoClassificationTask? {
-        tasks.first(where: { $0.state == .running })
     }
 
     var canChangeEnvironment: Bool { activeTask == nil && activeMutationTaskID == nil && !isRefreshingEnvironment }
@@ -96,7 +88,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
         authorizationStatus = photoLibrary.authorizationStatus
         await refreshAlbums()
         if authorizationStatus == .authorized || authorizationStatus == .limited {
-            do { accessiblePhotoCount = try photoLibrary.assets(for: .allPhotos).count }
+            do { accessiblePhotoCount = try photoLibrary.accessiblePhotoCount() }
             catch { errorMessage = error.localizedDescription }
         } else {
             accessiblePhotoCount = 0
@@ -174,9 +166,9 @@ final class PhotoClassificationCoordinator: ObservableObject {
             savedOrdinaryScheme = ordinaryScheme
             savedScreenshotScheme = screenshotScheme
             let defaults = UserDefaults.standard
-            defaults.set(modelIdentifier, forKey: "lmStudioModel")
-            Self.saveScheme(ordinaryScheme, forKey: "ordinaryClassificationScheme")
-            Self.saveScheme(screenshotScheme, forKey: "screenshotClassificationScheme")
+            defaults.set(modelIdentifier, forKey: "nativeModelIdentifier")
+            Self.saveScheme(ordinaryScheme, forKey: "nativeOrdinaryScheme")
+            Self.saveScheme(screenshotScheme, forKey: "nativeScreenshotScheme")
             upsert(task)
             selectedTaskID = task.id
             isCreatingTask = false
@@ -208,7 +200,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
             guard let url = URL(string: endpointText) else { throw LMStudioError.invalidEndpoint }
             lmStudio = try LMStudioClient(endpoint: url)
             modelConnection = .checking
-            UserDefaults.standard.set(endpointText, forKey: "lmStudioEndpoint")
+            UserDefaults.standard.set(endpointText, forKey: "nativeModelEndpoint")
             Task { await refreshEnvironment() }
         } catch {
             errorMessage = error.localizedDescription
@@ -216,9 +208,9 @@ final class PhotoClassificationCoordinator: ObservableObject {
     }
 
     func persistSchemePreferences() {
-        Self.saveScheme(savedOrdinaryScheme, forKey: "ordinaryClassificationScheme")
-        Self.saveScheme(savedScreenshotScheme, forKey: "screenshotClassificationScheme")
-        UserDefaults.standard.set(preferredModelIdentifier, forKey: "lmStudioModel")
+        Self.saveScheme(savedOrdinaryScheme, forKey: "nativeOrdinaryScheme")
+        Self.saveScheme(savedScreenshotScheme, forKey: "nativeScreenshotScheme")
+        UserDefaults.standard.set(preferredModelIdentifier, forKey: "nativeModelIdentifier")
     }
 
     func pause(taskID: UUID) {
@@ -570,10 +562,10 @@ final class PhotoClassificationCoordinator: ObservableObject {
         switch kind {
         case .ordinary:
             mutation(&savedOrdinaryScheme)
-            Self.saveScheme(savedOrdinaryScheme, forKey: "ordinaryClassificationScheme")
+            Self.saveScheme(savedOrdinaryScheme, forKey: "nativeOrdinaryScheme")
         case .screenshot:
             mutation(&savedScreenshotScheme)
-            Self.saveScheme(savedScreenshotScheme, forKey: "screenshotClassificationScheme")
+            Self.saveScheme(savedScreenshotScheme, forKey: "nativeScreenshotScheme")
         }
     }
 

@@ -320,14 +320,17 @@ private struct ClassificationSchemeEditor: View {
 
     var body: some View {
         Section(scheme.name) {
-            ForEach(scheme.categories) { category in
-                ClassificationCategoryEditorRow(
-                    category: category,
-                    onUpdate: onUpdate,
-                    onDelete: { onDelete(category.id) }
-                )
+            DisclosureGroup("编辑分类（\(scheme.categories.filter(\.isEnabled).count)/\(scheme.categories.count) 个启用）") {
+                ForEach(scheme.categories) { category in
+                    ClassificationCategoryEditorRow(
+                        category: category,
+                        onUpdate: onUpdate,
+                        onDelete: { onDelete(category.id) }
+                    )
+                    .padding(.vertical, 4)
+                }
+                Button("新增分类", systemImage: "plus", action: onAdd)
             }
-            Button("新增分类", systemImage: "plus", action: onAdd)
         }
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import Darwin
 
 @Model
 final class PhotoClassificationTaskEntity {
@@ -19,6 +20,20 @@ final class PhotoClassificationTaskStore {
     private let context: ModelContext
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+
+    static func nativeContainer(directory: URL) throws -> ModelContainer {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true,
+                                        attributes: [.posixPermissions: 0o700])
+        let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        let attributes = try fileManager.attributesOfItem(atPath: directory.path)
+        guard values.isDirectory == true, values.isSymbolicLink != true,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == geteuid(),
+              let permissions = attributes[.posixPermissions] as? NSNumber,
+              permissions.intValue & 0o077 == 0 else { throw CocoaError(.fileReadNoPermission) }
+        let configuration = ModelConfiguration(url: directory.appendingPathComponent("Tasks.store"))
+        return try ModelContainer(for: PhotoClassificationTaskEntity.self, configurations: configuration)
+    }
 
     init(container: ModelContainer) {
         context = ModelContext(container)
