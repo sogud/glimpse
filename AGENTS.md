@@ -1,6 +1,6 @@
 # Glimpse Agent Guide
 
-Read [README.md](README.md) for supported commands and [docs/functionality.md](docs/functionality.md) for the release scope and acceptance criteria. The native design in [docs/macos-local-photo-classification-spec.md](docs/macos-local-photo-classification-spec.md) is outside the standalone CLI release.
+Read [README.md](README.md) for supported commands and [docs/functionality.md](docs/functionality.md) for the release scope and acceptance criteria. Native behavior is defined in [docs/macos-local-photo-classification-spec.md](docs/macos-local-photo-classification-spec.md). Native preview verification is separate from the standalone CLI release.
 
 ## Required development cycle
 
@@ -53,3 +53,7 @@ CLI builds need compatible Swift 6 Command Line Tools. Native builds need a full
 ## CLI releases
 
 Use bash scripts/package-cli.sh vX.Y.Z to build and ad-hoc sign the macOS arm64 executable, package it with docs/cli-install.md, and produce SHA256SUMS under .build/releases/. Run python3 Tests/CLIReleaseChecks.py <release-directory> for archive contents, signature and isolated install checks. Download the uploaded assets and run the same check on them. CI must pass for the released code. Do not include runtime files, plans, photos, temporary exports or personal paths. Never use a CLI release to claim native UI/PhotoKit acceptance.
+
+## Native previews
+
+Build GlimpseMac with compatible full Xcode, configuration Release and ARCHS=arm64. Package only the App and docs/native-install.md using bash scripts/package-native.sh vX.Y.Z <built-app> <new-output-directory>. Run python3 Tests/NativeReleaseChecks.py <release-directory> before upload and on downloaded assets. The package is ad-hoc signed and must not contain debug user paths, task stores, photos or test fixtures. Use a prerelease until real-library and UI acceptance is complete; compile/archive checks are not interaction tests.

@@ -8,7 +8,7 @@
 | macOS App GlimpseMac | 全图库分批、模型状态、分类方案、网格复核、相册映射和撤销 | PhotoKit | 完整且兼容系统的 Xcode，macOS 15+ |
 | iOS App PhotoSort | 滑动清理、相册整理和本地智能分组 | PhotoKit | 完整 Xcode，iOS 18.2+ |
 
-本次内部发布范围是 standalone CLI；[下载与安装](docs/cli-install.md)不需要 Xcode。原生应用继续开发。发布验收契约见 [功能说明](docs/functionality.md)；原生设计见 [macOS Spec](docs/macos-local-photo-classification-spec.md)。开发周期遵循 [AGENTS.md](AGENTS.md)：先资料、再失败测试、最小实现、最终核对。当前格式不做向后兼容或迁移。
+CLI 与原生 App 分别交付内部预览包，下载后运行都不需要 Xcode；从源码构建原生 App 仍需要完整 Xcode。安装步骤见 [CLI 安装说明](docs/cli-install.md) 和 [原生 App 安装说明](docs/native-install.md)。发布验收契约见 [功能说明](docs/functionality.md)；原生设计见 [macOS Spec](docs/macos-local-photo-classification-spec.md)。开发周期遵循 [AGENTS.md](AGENTS.md)：先资料、再失败测试、最小实现、最终核对。当前格式不做向后兼容或迁移。
 
 ## CLI 使用
 

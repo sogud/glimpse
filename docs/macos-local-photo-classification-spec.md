@@ -57,4 +57,4 @@
 4. 验证不确认就没有相册变化；确认后只写指定成员，撤销不改变原有成员。
 5. 检查请求只到回环地址，临时 JPEG/OCR 不进入持久记录。PhotoKit 请求 iCloud 图片可能使用系统网络。
 
-不包含 App Store、notarization、自动更新、云识图、telemetry 或无人确认的删除。本次仅发布 CLI，不代表上述原生验收已经完成。
+不包含 App Store、notarization、自动更新、云识图、telemetry 或无人确认的删除。原生包只标为内部预览，不代表上述真实图库与原生 UI 验收已经完成。

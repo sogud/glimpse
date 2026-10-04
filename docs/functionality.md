@@ -1,6 +1,6 @@
 # 功能与发布范围
 
-本次内部开发版发布 standalone macOS CLI，支持 macOS 14+ 的 Apple Silicon。原生 macOS/iOS 不包含在 CLI 安装包中；不能把 CLI 验证结果当成原生应用验收。开发规则见 [AGENTS.md](../AGENTS.md)。
+内部开发版分别交付 standalone macOS CLI（macOS 14+）与原生 macOS GUI 预览包（macOS 15+），均面向 Apple Silicon。原生 macOS/iOS 不包含在 CLI 安装包中；不能把 CLI 验证结果当成原生应用验收。原生 App 依赖 LM Studio 0.4+；安装步骤见 [原生安装说明](native-install.md)。开发规则见 [AGENTS.md](../AGENTS.md)。
 
 ## CLI 验收契约
 
