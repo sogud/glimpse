@@ -7,6 +7,16 @@ public struct LMStudioClassification: Equatable, Sendable {
 }
 
 public actor LMStudioVisionClient {
+    private final class RejectRedirects: NSObject, URLSessionTaskDelegate {
+        func urlSession(
+            _ session: URLSession, task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            completionHandler(nil)
+        }
+    }
     private struct ModelsResponse: Decodable {
         struct Model: Decodable { let id: String }
         let data: [Model]
@@ -23,6 +33,13 @@ public actor LMStudioVisionClient {
     private struct ModelOutput: Decodable {
         let category: String?
         let reason: String
+
+        enum CodingKeys: String, CodingKey { case category, reason }
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            category = try container.decode(String?.self, forKey: .category)
+            reason = try container.decode(String.self, forKey: .reason)
+        }
     }
 
     private let endpoint: URL
@@ -38,12 +55,17 @@ public actor LMStudioVisionClient {
     }
 
     public func resolveModel(requested: String?) async throws -> String {
-        if let requested { return requested }
         var request = URLRequest(url: endpoint.appendingPathComponent("models"))
         request.timeoutInterval = 5
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: RejectRedirects())
         try validate(response, data: data)
         let models = try JSONDecoder().decode(ModelsResponse.self, from: data).data.map(\.id)
+        if let requested {
+            guard models.contains(requested) else {
+                throw GlimpsePhotosCLIError.modelOutput("指定模型尚未加载：\(requested)")
+            }
+            return requested
+        }
         let preferred = models.first { identifier in
             let normalized = identifier.lowercased()
             return normalized.contains("qwen3-vl") || normalized.contains("vision") || normalized.contains("vl")
@@ -152,12 +174,7 @@ public actor LMStudioVisionClient {
         request.timeoutInterval = 180
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse,
-           body["response_format"] != nil,
-           http.statusCode == 400 || http.statusCode == 422 {
-            throw GlimpsePhotosCLIError.modelOutput("当前 LM Studio runtime 不支持结构化输出")
-        }
+        let (data, response) = try await session.data(for: request, delegate: RejectRedirects())
         try validate(response, data: data)
         guard let content = try JSONDecoder().decode(ChatResponse.self, from: data).choices.first?.message.content else {
             throw GlimpsePhotosCLIError.invalidResponse
@@ -206,6 +223,9 @@ public actor LMStudioVisionClient {
 
     private func validate(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { throw GlimpsePhotosCLIError.invalidResponse }
+        guard !(300..<400 ~= http.statusCode) else {
+            throw GlimpsePhotosCLIError.commandFailed("已拒绝 LM Studio HTTP 重定向：仅允许直接访问本机端点")
+        }
         guard 200..<300 ~= http.statusCode else {
             let message = String(data: data, encoding: .utf8) ?? "LM Studio 请求失败"
             throw GlimpsePhotosCLIError.commandFailed(message)
@@ -215,6 +235,6 @@ public actor LMStudioVisionClient {
     private static func isLoopback(_ endpoint: URL) -> Bool {
         guard endpoint.scheme == "http" || endpoint.scheme == "https",
               let host = endpoint.host?.lowercased() else { return false }
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
     }
 }

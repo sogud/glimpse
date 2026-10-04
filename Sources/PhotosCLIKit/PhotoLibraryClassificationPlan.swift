@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum PhotoClassificationSchemeKind: String, Codable, Equatable, Sendable {
@@ -108,11 +109,7 @@ public struct PhotoLibraryClassificationItem: Codable, Equatable, Sendable {
     public let categoryIdentifier: String?
     public let categoryName: String?
     public let reason: String
-    public let analysisSucceeded: Bool?
-
-    public var analysisCompletedSuccessfully: Bool {
-        analysisSucceeded != false
-    }
+    public let analysisSucceeded: Bool
 
     public init(
         photo: SelectedPhoto,
@@ -157,36 +154,109 @@ public struct PhotoLibraryAlbumAddition: Codable, Equatable, Sendable {
 }
 
 public struct PhotoLibraryClassificationPlan: Codable, Equatable, Sendable {
+    public let id: UUID
     public let modelIdentifier: String
     public let createdAt: Date
     public let items: [PhotoLibraryClassificationItem]
 
     public init(
+        id: UUID = UUID(),
         modelIdentifier: String,
         createdAt: Date = Date(),
         items: [PhotoLibraryClassificationItem]
     ) {
+        self.id = id
         self.modelIdentifier = modelIdentifier
         self.createdAt = createdAt
         self.items = items
     }
 
-    public var albumAdditions: [PhotoLibraryAlbumAddition] {
-        let grouped = Dictionary(grouping: items.compactMap { item -> (String, String)? in
-            guard let categoryName = item.categoryName else { return nil }
+    public func validatedAlbumAdditions() throws -> [PhotoLibraryAlbumAddition] {
+        guard items.count <= PhotosAutomation.maximumExportCount else {
+            throw PhotoLibraryPlanError.invalidItem("单个计划最多 10 项")
+        }
+        var seenIdentifiers: Set<String> = []
+        var grouped: [String: [String]] = [:]
+        for item in items {
+            guard !item.assetIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  item.assetIdentifier.utf8.count <= 512,
+                  seenIdentifiers.insert(item.assetIdentifier).inserted else {
+                throw PhotoLibraryPlanError.invalidItem("照片 ID 为空或重复")
+            }
+            guard let categoryIdentifier = item.categoryIdentifier else {
+                guard item.categoryName == nil else {
+                    throw PhotoLibraryPlanError.invalidItem("分类名称缺少对应 ID")
+                }
+                continue
+            }
+            let scheme = PhotoClassificationCatalog.scheme(for: item.schemeKind)
+            guard item.analysisSucceeded,
+                  let category = scheme.categories.first(where: { $0.identifier == categoryIdentifier }),
+                  item.categoryName == category.name else {
+                throw PhotoLibraryPlanError.invalidItem("分类 ID、名称、方案或分析状态不一致")
+            }
             let schemeName = item.schemeKind == .screenshot ? "截图" : "普通照片"
-            let isDeletionCandidate = item.categoryIdentifier.map {
-                PhotoClassificationCatalog.deletionCandidateIdentifiers.contains($0)
-            } ?? false
-            let albumName = isDeletionCandidate ? "待删除" : "\(schemeName)·\(categoryName)"
-            return (albumName, item.assetIdentifier)
-        }, by: \.0)
+            let isDeletionCandidate = PhotoClassificationCatalog.deletionCandidateIdentifiers.contains(categoryIdentifier)
+            let albumName = isDeletionCandidate ? "待删除" : "\(schemeName)·\(category.name)"
+            grouped[albumName, default: []].append(item.assetIdentifier)
+        }
         return grouped.keys.sorted().map { albumName in
             PhotoLibraryAlbumAddition(
                 folderName: "Glimpse",
                 albumName: albumName,
-                assetIdentifiers: grouped[albumName, default: []].map(\.1)
+                assetIdentifiers: grouped[albumName, default: []]
             )
+        }
+    }
+}
+
+public enum PhotoLibraryPlanError: LocalizedError {
+    case invalidItem(String)
+    case outputExists
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidItem(let message): return "分类计划无效：\(message)，没有写入照片图库"
+        case .outputExists: return "分类计划文件已存在，请选择新的 --output 路径"
+        }
+    }
+}
+
+public enum PhotoLibraryPlanStore {
+    public static func prepareDestination(_ url: URL) throws {
+        try checkDestination(url)
+        let directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let probe = directory.appendingPathComponent(".glimpse-write-check-\(UUID().uuidString)")
+        try Data().write(to: probe, options: .withoutOverwriting)
+        try FileManager.default.removeItem(at: probe)
+    }
+
+    public static func checkDestination(_ url: URL) throws {
+        // attributesOfItem 也能识别悬空软链接，不能把已有目录项当作新文件。
+        if (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil {
+            throw PhotoLibraryPlanError.outputExists
+        }
+    }
+
+    public static func save(_ plan: PhotoLibraryClassificationPlan, to url: URL) throws {
+        _ = try plan.validatedAlbumAdditions()
+        try checkDestination(url)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        // 排他创建：即使预检查后有另一进程创建同名文件，也不能覆盖它。
+        let data = try encoder.encode(plan)
+        let descriptor = Darwin.open(url.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        do {
+            try handle.write(contentsOf: data)
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
         }
     }
 }

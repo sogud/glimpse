@@ -1,24 +1,29 @@
 import Foundation
 
 public struct PhotoLibraryClassificationService: Sendable {
-    private let photos = PhotosAutomation()
+    private let photos: PhotosAutomation
 
-    public init() {}
+    public init(photos: PhotosAutomation = PhotosAutomation()) {
+        self.photos = photos
+    }
 
     public func classifySelection(
         limit: Int = 10,
         requestedModel: String? = nil,
         endpoint: URL = URL(string: "http://127.0.0.1:1234/v1")!,
         progress: @escaping @Sendable (Int, Int, String) -> Void = { _, _, _ in }
-    ) async throws -> PhotoLibraryClassificationPlan {
+    ) async throws -> (plan: PhotoLibraryClassificationPlan, skippedAssetIdentifiers: Set<String>) {
+        let client = try LMStudioVisionClient(endpoint: endpoint)
+        let model = try await client.resolveModel(requested: requestedModel)
         let selection = try photos.exportSelection(limit: limit)
         defer { selection.removeTemporaryFiles() }
-        return try await classify(
+        let plan = try await classify(
             photos: selection.photos,
-            requestedModel: requestedModel,
-            endpoint: endpoint,
+            client: client,
+            model: model,
             progress: progress
         )
+        return (plan, selection.skippedAssetIdentifiers)
     }
 
     public func classifyNextBatch(
@@ -28,6 +33,8 @@ public struct PhotoLibraryClassificationService: Sendable {
         endpoint: URL = URL(string: "http://127.0.0.1:1234/v1")!,
         progress: @escaping @Sendable (Int, Int, String) -> Void = { _, _, _ in }
     ) async throws -> PhotoLibraryBatchResult {
+        let client = try LMStudioVisionClient(endpoint: endpoint)
+        let model = try await client.resolveModel(requested: requestedModel)
         let selection = try photos.exportLibraryBatch(
             excluding: processedAssetIdentifiers,
             limit: limit
@@ -40,8 +47,8 @@ public struct PhotoLibraryClassificationService: Sendable {
         }
         let plan = try await classify(
             photos: selection.photos,
-            requestedModel: requestedModel,
-            endpoint: endpoint,
+            client: client,
+            model: model,
             progress: progress
         )
         return .classified(plan, skippedAssetIdentifiers: selection.skippedAssetIdentifiers)
@@ -49,15 +56,14 @@ public struct PhotoLibraryClassificationService: Sendable {
 
     private func classify(
         photos: [SelectedPhoto],
-        requestedModel: String?,
-        endpoint: URL,
+        client: LMStudioVisionClient,
+        model: String,
         progress: @escaping @Sendable (Int, Int, String) -> Void
     ) async throws -> PhotoLibraryClassificationPlan {
-        let client = try LMStudioVisionClient(endpoint: endpoint)
-        let model = try await client.resolveModel(requested: requestedModel)
         var results: [PhotoLibraryClassificationItem] = []
 
         for (index, photo) in photos.enumerated() {
+            try Task.checkCancellation()
             progress(index + 1, photos.count, photo.filename)
             do {
                 let classification = try await client.classify(
@@ -77,6 +83,7 @@ public struct PhotoLibraryClassificationService: Sendable {
                     )
                 )
             } catch {
+                if Task.isCancelled { throw CancellationError() }
                 results.append(
                     PhotoLibraryClassificationItem(
                         photo: photo,
@@ -91,7 +98,4 @@ public struct PhotoLibraryClassificationService: Sendable {
         return PhotoLibraryClassificationPlan(modelIdentifier: model, items: results)
     }
 
-    public func apply(plan: PhotoLibraryClassificationPlan) throws -> Int {
-        try photos.apply(plan.albumAdditions)
-    }
 }

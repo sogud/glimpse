@@ -1,0 +1,21 @@
+name: Glimpse checks
+on:
+  push:
+    branches: [master]
+    paths: ['CLI/**', 'Sources/**', 'MacApp/**', 'Tests/**', 'scripts/**', '.github/workflows/**', 'Package.swift', 'PhotoSort.xcodeproj/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: CLI and isolated recovery checks
+        run: bash scripts/check.sh
+      - name: Native macOS compile
+        run: xcodebuild -project PhotoSort.xcodeproj -scheme GlimpseMac -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+      - name: Native classification planning tests
+        run: swift test --filter LocalPhotoClassificationTests

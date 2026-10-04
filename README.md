@@ -1,55 +1,63 @@
-# PhotoSort (PhotoSwipeCleaner)
+# Glimpse / PhotoSort
 
-一个 iOS 照片清理工具：用滑动快速做决定，删除操作先“标记待删除”，最后一次性提交给系统相册确认。
+本地照片整理项目，目前有三个独立入口。它们的任务记录不共享，不要把 CLI 进度当作原生 App 进度。
 
-This is an iOS photo cleanup tool: swipe to decide quickly. Deletions are staged first and then committed in one batch confirmation.
+| 入口 | 当前用途 | 照片访问 | 构建要求 |
+| --- | --- | --- | --- |
+| macOS CLI glimpse | 全图库分批分类、输出计划、确认后加入相册 | Photos Automation，临时导出 | Swift 6 + Command Line Tools，macOS 14+ |
+| macOS App GlimpseMac | 来源选择、分类方案、网格复核、相册映射和撤销 | PhotoKit | 完整且兼容系统的 Xcode，macOS 15+ |
+| iOS App PhotoSort | 滑动清理、相册整理和本地智能分组 | PhotoKit | 完整 Xcode，iOS 18.2+ |
 
-## Features / 功能
+本次内部发布范围是 standalone CLI；[下载与安装](docs/cli-install.md)不需要 Xcode。原生应用继续开发。发布验收契约见 [功能说明](docs/functionality.md)；原生设计见 [macOS Spec](docs/macos-local-photo-classification-spec.md)。开发周期遵循 [AGENTS.md](AGENTS.md)：先资料、再失败测试、最小实现、最终核对。当前格式不做向后兼容或迁移。
 
-- Delete-first workflow: swipe left to mark for deletion, then batch delete once.
-- Optional organize workflow: swipe right to move to a target album.
-- Candidate presets: Screenshots, Videos, Recent 30 days (plus an advanced album source).
-- Undo for the last action in a session.
-- File size chip on cards (fetches from iCloud when needed, without blocking swipes).
+## CLI 使用
 
-## Privacy / 隐私
+先在 LM Studio 中启动本地服务并加载视觉模型，例如已安装的 Qwen3-VL。CLI 不安装模型、不自动启动服务。
 
-- Photos stay on device. The app uses PhotoKit and does not upload your media.
-- Deletions go to the system “Recently Deleted” album, where you can recover them.
+    rtk swift run glimpse photos status --json
+    rtk swift run glimpse photos classify-next --limit 10
 
-## Requirements / 环境
+classify-next 从已保存的稳定 Photos ID 继续扫描，单批最多检查 10 个图库项目；视频或无法导出的项目也占名额。同一用户同时只允许一个写进程，即使运行目录不同。classify-selection 处理手选照片，同样记录结果。失败或跳过项目可显式重新排队：
 
-- iOS 18.2+
-- macOS 15+（Apple Silicon，仅本地开发版本）
-- Xcode 16.2+
+    rtk swift run glimpse photos retry failed
+    rtk swift run glimpse photos retry skipped
 
-## Build & Run / 构建运行
+默认数据在 ~/Library/Application Support/Glimpse/CLI。GLIMPSE_HOME 可指定隔离目录；不读取或迁移旧版个人进度文件。
 
-1. Open `PhotoSort.xcodeproj` in Xcode.
-2. Select a device (real device recommended for PhotoKit behavior).
-3. Build and Run.
+默认端点是 http://127.0.0.1:1234/v1，只允许本机回环地址，拒绝 HTTP 重定向。未指定 --model 时按模型名称优先选择 Qwen3-VL/vision/vl；这不是视觉能力检测，多个模型或特殊名称建议显式指定：
 
-## macOS Photos CLI 本地分类
+    rtk swift run glimpse photos classify-next --limit 10 --model qwen/qwen3-vl-4b --json
 
-不需要 Xcode。自动从上次进度继续处理下一批最多 10 张静态照片：
+每张图片只发送一次分类请求，同一次响应决定普通照片/截图及具体分类。不自动降级重发；模型必须能接受图片和结构化输出。服务返回的实际错误会保留，不能仅凭 HTTP 400 判断是视觉模块或结构化输出不兼容。
 
-```bash
-swift run glimpse photos classify-next --limit 10
-```
+流程是：Photos 临时导出副本 → sips 转成最长边 1024 px 的 JPEG → 本机 LM Studio → 保存 JSON 计划 → 正常完成或抛出错误时清理临时图片。导出过程可能下载 iCloud 原图；强制终止进程可能留下临时文件。分析不会创建分类相册、移动或删除照片。
 
-如需只分析手动选择的照片，使用 `classify-selection`。
+计划保存在运行目录的 Plans/，也可以用 --output 指定新路径。已有文件不会覆盖。先保存计划，再保存批次进度。
 
-CLI 默认连接已运行的 `http://127.0.0.1:1234/v1`，自动选择 Qwen3-VL 等已加载视觉模型。每张照片只发送一次分类请求，由同一次响应确定普通照片/截图及具体分类。它会临时导出最长边 1024 px 的 JPEG 给本机 LM Studio，完成后删除临时文件，并把分类计划保存到 `~/Library/Application Support/Glimpse/Plans/`。分析阶段不会修改 Photos。
+检查输出或 JSON 计划后，再显式应用：
 
-检查终端输出或计划 JSON 后，再显式应用：
+    rtk swift run glimpse photos apply "<plan.json>"
 
-```bash
-swift run glimpse photos apply "<plan.json>"
-```
+命令会验证计划里的分类 ID、名称、方案和照片 ID，再显示相册清单，输入 yes 后才写入。首次访问需要允许终端控制「照片」。只向 Glimpse 文件夹下的“普通照片·分类”“截图·分类”或统一的“待删除”相册添加照片；原照片不移动、不删除。“待删除”只是一条需要人工复核的建议。
 
-首次运行时允许终端控制「照片」。批次进度按 Photos 的稳定资源 ID 保存，不受图库顺序变化影响；视频和 Photos 无法导出的项目会安全跳过，单张识别失败会重试，连续失败三次后停止自动重试并留在计划中待人工确认。应用后，原照片不会删除或移动，只会加入 `Glimpse` 文件夹下的“普通照片·分类”或“截图·分类”相册。模型可把明显误拍、严重失焦、空白或无信息价值的图片建议到统一的 `Glimpse/待删除` 相册，但 CLI 不提供删除照片的命令。
+相册按顺序写入，每个相册的进行中/已确认结果保存在 Receipts/。中途退出或失败后，重新 apply 同一计划会跳过已确认的相册，继续未知或尚未写入的相册；添加操作会检查已有成员。修改已开始写入的计划会被拒绝。CLI 不自动回滚，也不提供删除或撤销。
 
-## Notes / 说明
+## 进度含义
 
-- Some PhotoKit confirmations are controlled by iOS and cannot be fully removed. Batch deletion reduces repeated prompts.
-- Limited Photos access (iOS “Select Photos…”) will only show the items you granted.
+photos status [--json] 只读本机批处理记录，不访问 Photos、不连接模型，也不查询图库总数：
+
+- classified：成功得到分类；不代表已加入相册。
+- needsReview：分析完成，但模型未确定分类。
+- retryPending：模型分析失败，后续 classify-next 再尝试；单次运行不重发。
+- failed：已失败三次，停止自动重试。
+- skipped：视频或 Photos 未能导出的项目；retry skipped 可重新排队。
+- excludedFromNextBatch：下次按 ID 跳过的总数，不是成功分类数量。
+- scanComplete：上一次扫描到达末尾，不意味着全部分类或写入成功，也不反映后来新增照片。
+- receipts：计划 ID、确认成员数、已确认/结果未知/尚未处理相册数和完成状态；不输出照片详情。具体资源记录保存在私人回执文件中。
+
+## 开发与验证
+
+    rtk proxy bash scripts/check.sh
+    rtk swift build -c release --product glimpse
+
+检查使用合成计划、临时文件和临时本机 HTTP 服务，不访问个人 Photos 或 LM Studio。原生应用在 PhotoSort.xcodeproj 内选择 PhotoSort 或 GlimpseMac scheme；CLI 检查不能证明原生 UI 和 PhotoKit 流程正常。

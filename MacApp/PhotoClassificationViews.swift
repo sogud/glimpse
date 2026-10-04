@@ -15,6 +15,7 @@ struct GlimpseMacRootView: View {
                             .tag(task.id)
                             .contextMenu {
                                 Button("删除任务", role: .destructive) { taskPendingDeletion = task }
+                                    .disabled(!coordinator.canDeleteTask(id: task.id))
                             }
                     }
                 }
@@ -72,7 +73,7 @@ struct GlimpseMacRootView: View {
             NewClassificationTaskView()
         } else if let task = coordinator.selectedTask {
             switch task.state {
-            case .readyForReview, .applying, .applied, .undone:
+            case .readyForReview, .applying, .interrupted, .closed, .applied, .undone:
                 ClassificationReviewView(task: task)
             case .draft, .running, .paused, .failed:
                 ClassificationProgressView(task: task)
@@ -336,6 +337,7 @@ private struct ClassificationProgressView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(task.assetFingerprints.isEmpty)
+                    .disabled(coordinator.activeTaskID != nil)
                 }
             }
             if task.assetFingerprints.isEmpty {
@@ -381,6 +383,11 @@ private struct ClassificationReviewView: View {
                     Text("正在写入 Photos")
                 } else if task.state == .applied {
                     Button("撤销本次整理") { confirmingUndo = true }
+                } else if task.state == .interrupted {
+                    Text("上次 Photos 操作中断，请先检查相册；此任务不能重试写入或撤销。")
+                    Button("已检查，关闭任务") { coordinator.acknowledgeInterruptedWrite(taskID: task.id) }
+                } else if task.state == .closed {
+                    Text("已检查并关闭，历史记录保留。")
                 }
             }
             .padding(20)
@@ -390,6 +397,7 @@ private struct ClassificationReviewView: View {
             ScrollView {
                 TargetAlbumMappingView(task: task, categories: categories)
                     .padding(20)
+                    .disabled(!task.state.canReview)
 
                 if !selectedAssets.isEmpty {
                     HStack {
@@ -403,6 +411,7 @@ private struct ClassificationReviewView: View {
                             Divider()
                             Button("待分类") { moveSelected(to: nil) }
                         }
+                        .disabled(!task.state.canReview)
                         Button("清除选择") { selectedAssets.removeAll() }
                         Spacer()
                     }
@@ -487,8 +496,8 @@ private struct TargetAlbumMappingView: View {
                                 set: { coordinator.setTarget(taskID: task.id, categoryIdentifier: category.id, target: $0) }
                             )
                         ) {
-                            Text("新建“\(category.category.name)”").tag(
-                                PhotoAlbumTarget.newAlbum(name: category.category.name)
+                            Text("新建“\(PhotoClassificationPlanner.albumName(schemeName: category.schemeName, categoryName: category.category.name))”").tag(
+                                PhotoAlbumTarget.newAlbum(name: PhotoClassificationPlanner.albumName(schemeName: category.schemeName, categoryName: category.category.name))
                             )
                             ForEach(coordinator.albums) { album in
                                 Text("已有：\(album.name)").tag(
@@ -684,6 +693,8 @@ private extension PhotoClassificationTaskState {
         case .paused: "已暂停"
         case .readyForReview: "待复核"
         case .applying: "写入中"
+        case .interrupted: "写入中断，需检查"
+        case .closed: "已检查并关闭"
         case .applied: "已整理"
         case .undone: "已撤销"
         case .failed: "失败"

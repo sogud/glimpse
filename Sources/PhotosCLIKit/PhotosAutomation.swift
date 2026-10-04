@@ -12,14 +12,21 @@ public struct ExportedPhotoBatch: Sendable {
 
 public struct PhotosAutomation: Sendable {
     public static let maximumExportCount = 10
+    private let runCommand: @Sendable (String, [String]) throws -> Data
 
-    public init() {}
+    public init() {
+        runCommand = { try CommandRunner.run($0, arguments: $1) }
+    }
+
+    public init(runCommand: @escaping @Sendable (String, [String]) throws -> Data) {
+        self.runCommand = runCommand
+    }
 
     public func exportSelection(limit: Int) throws -> ExportedPhotoBatch {
         try export(
             limit: limit,
             script: Self.exportSelectionScript,
-            additionalArguments: [],
+            excludedIdentifiers: nil,
             allowsEmptyResult: false
         )
     }
@@ -31,7 +38,7 @@ public struct PhotosAutomation: Sendable {
         return try export(
             limit: limit,
             script: Self.exportNextItemsScript,
-            additionalArguments: processedAssetIdentifiers.sorted(),
+            excludedIdentifiers: processedAssetIdentifiers,
             allowsEmptyResult: true
         )
     }
@@ -39,7 +46,7 @@ public struct PhotosAutomation: Sendable {
     private func export(
         limit: Int,
         script: String,
-        additionalArguments: [String],
+        excludedIdentifiers: Set<String>?,
         allowsEmptyResult: Bool
     ) throws -> ExportedPhotoBatch {
         let boundedLimit = min(max(limit, 1), Self.maximumExportCount)
@@ -54,9 +61,15 @@ public struct PhotosAutomation: Sendable {
         }
 
         do {
-            let data = try CommandRunner.run(
+            var arguments = ["-e", script, root.path, String(boundedLimit)]
+            if let excludedIdentifiers {
+                let identifiersURL = root.appendingPathComponent("excluded.txt")
+                try Data(excludedIdentifiers.sorted().joined(separator: "\n").utf8).write(to: identifiersURL)
+                arguments.append(identifiersURL.path)
+            }
+            let data = try runCommand(
                 "/usr/bin/osascript",
-                arguments: ["-e", script, root.path, String(boundedLimit)] + additionalArguments
+                arguments
             )
             let metadata = String(decoding: data, as: UTF8.self)
             let photos = try parseExportedPhotos(metadata, root: root)
@@ -77,27 +90,44 @@ public struct PhotosAutomation: Sendable {
         }
     }
 
-    public func apply(_ additions: [PhotoLibraryAlbumAddition]) throws -> Int {
-        var appliedCount = 0
-        for addition in additions where !addition.assetIdentifiers.isEmpty {
-            let data = try CommandRunner.run(
-                "/usr/bin/osascript",
-                arguments: ["-e", Self.applyScript, addition.folderName, addition.albumName] + addition.assetIdentifiers
-            )
-            appliedCount += Int(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    public func applyAlbum(_ addition: PhotoLibraryAlbumAddition) throws -> PhotoLibraryAlbumResult {
+        let data = try runCommand("/usr/bin/osascript", ["-e", Self.applyScript, addition.folderName, addition.albumName] + addition.assetIdentifiers)
+        var albumIdentifier: String?
+        var added: [String] = []
+        var existing: [String] = []
+        var missing: [String] = []
+        var seen: Set<String> = []
+        let expected = Set(addition.assetIdentifiers)
+        for line in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline) {
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard fields.count == 2 else { throw GlimpsePhotosCLIError.invalidResponse }
+            if fields[0] == "album" {
+                guard albumIdentifier == nil, !fields[1].isEmpty else { throw GlimpsePhotosCLIError.invalidResponse }
+                albumIdentifier = fields[1]
+                continue
+            }
+            guard expected.contains(fields[1]), seen.insert(fields[1]).inserted else { throw GlimpsePhotosCLIError.invalidResponse }
+            switch fields[0] {
+            case "added": added.append(fields[1])
+            case "existing": existing.append(fields[1])
+            case "missing": missing.append(fields[1])
+            default: throw GlimpsePhotosCLIError.invalidResponse
+            }
         }
-        return appliedCount
+        guard let albumIdentifier, seen == expected else { throw GlimpsePhotosCLIError.invalidResponse }
+        return PhotoLibraryAlbumResult(albumIdentifier: albumIdentifier, addedAssetIdentifiers: added,
+                                       existingAssetIdentifiers: existing, missingAssetIdentifiers: missing)
     }
 
     private func parseExportedPhotos(_ metadata: String, root: URL) throws -> [SelectedPhoto] {
         let imageExtensions = Set(["jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "webp"])
         return try metadata.split(whereSeparator: \.isNewline).compactMap { line in
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard fields.count == 5,
-                  let width = Int(fields[2]),
-                  let height = Int(fields[3]),
-                  let index = Int(fields[4]) else {
-                return nil
+            guard fields.count == 4, !fields[0].isEmpty,
+                  let width = Int(fields[1]),
+                  let height = Int(fields[2]),
+                  let index = Int(fields[3]), index >= 0, index < Self.maximumExportCount else {
+                throw GlimpsePhotosCLIError.invalidResponse
             }
             let exportDirectory = root.appendingPathComponent(String(index), isDirectory: true)
             let files = try FileManager.default.contentsOfDirectory(
@@ -112,7 +142,7 @@ public struct PhotosAutomation: Sendable {
             }
             return SelectedPhoto(
                 identifier: fields[0],
-                filename: fields[1],
+                filename: exportedURL.lastPathComponent,
                 width: width,
                 height: height,
                 exportedURL: exportedURL
@@ -138,8 +168,10 @@ public struct PhotosAutomation: Sendable {
             if currentIndex is greater than or equal to maximumCount then exit repeat
             set destinationFolder to POSIX file (exportRoot & "/" & (currentIndex as text))
             tell application "Photos"
-                export {photoItem} to destinationFolder using originals false
-                set outputText to outputText & (id of photoItem as text) & tab & (filename of photoItem as text) & tab & (width of photoItem as text) & tab & (height of photoItem as text) & tab & (currentIndex as text) & linefeed
+                set outputText to outputText & (id of photoItem as text) & tab & (width of photoItem as text) & tab & (height of photoItem as text) & tab & (currentIndex as text) & linefeed
+                try
+                    export {photoItem} to destinationFolder using originals false
+                end try
             end tell
             set currentIndex to currentIndex + 1
         end repeat
@@ -159,23 +191,28 @@ public struct PhotosAutomation: Sendable {
     end run
     """#
 
-    private static let exportNextItemsScript = exportHandler + "\n" + #"""
+    private static let exportNextItemsScript = #"""
+    use framework "Foundation"
+    use scripting additions
+    on excludedIDs(processedText)
+        return current application's NSSet's setWithArray:(paragraphs of processedText)
+    end excludedIDs
+    """# + "\n" + exportHandler + "\n" + #"""
     on run argv
         set exportRoot to item 1 of argv
         set maximumCount to item 2 of argv as integer
-        if (count of argv) > 2 then
-            set processedIDs to items 3 thru -1 of argv
-        else
-            set processedIDs to {}
-        end if
+        set excludedFile to POSIX file (item 3 of argv)
+        set processedText to read excludedFile as «class utf8»
+        set processedIDs to my excludedIDs(processedText)
         set chosenItems to {}
-        tell application "Photos"
-            repeat with photoItem in media items
-                set assetID to id of photoItem as text
-                if assetID is not in processedIDs then set end of chosenItems to photoItem
-                if (count of chosenItems) is greater than or equal to maximumCount then exit repeat
-            end repeat
-        end tell
+        tell application "Photos" to set libraryIDs to id of every media item
+        repeat with libraryID in libraryIDs
+            set assetID to libraryID as text
+            if not ((processedIDs's containsObject:assetID) as boolean) then
+                tell application "Photos" to set end of chosenItems to first media item whose id is assetID
+            end if
+            if (count of chosenItems) is greater than or equal to maximumCount then exit repeat
+        end repeat
         return exportItems(chosenItems, exportRoot, maximumCount)
     end run
     """#
@@ -186,13 +223,6 @@ public struct PhotosAutomation: Sendable {
         set albumName to item 2 of argv
         set assetIDs to items 3 thru -1 of argv
         tell application "Photos"
-            set selectedMediaItems to {}
-            repeat with assetID in assetIDs
-                set matchingItems to every media item whose id is assetID
-                if (count of matchingItems) is greater than 0 then set end of selectedMediaItems to item 1 of matchingItems
-            end repeat
-            if (count of selectedMediaItems) is 0 then return 0
-
             set matchingFolders to every folder whose name is folderName
             if (count of matchingFolders) is 0 then
                 set targetFolder to make new folder named folderName
@@ -205,9 +235,43 @@ public struct PhotosAutomation: Sendable {
             else
                 set targetAlbum to item 1 of matchingAlbums
             end if
-            add selectedMediaItems to targetAlbum
-            return count of selectedMediaItems
+            set selectedMediaItems to {}
+            set requiredIDs to {}
+            set outputText to "album" & tab & (id of targetAlbum as text) & linefeed
+            set existingIDs to id of every media item of targetAlbum
+            repeat with assetID in assetIDs
+                set assetID to assetID as text
+                set matchingItems to every media item whose id is assetID
+                if (count of matchingItems) is 0 then
+                    set outputText to outputText & "missing" & tab & assetID & linefeed
+                else if assetID is in existingIDs then
+                    set end of requiredIDs to assetID
+                    set outputText to outputText & "existing" & tab & assetID & linefeed
+                else
+                    set end of requiredIDs to assetID
+                    set end of selectedMediaItems to item 1 of matchingItems
+                    set outputText to outputText & "added" & tab & assetID & linefeed
+                end if
+            end repeat
+            if (count of selectedMediaItems) > 0 then add selectedMediaItems to targetAlbum
+            set confirmedIDs to id of every media item of targetAlbum
+            repeat with assetID in requiredIDs
+                set assetID to assetID as text
+                if assetID is not in confirmedIDs then error "Photos 未确认相册成员，保留未知回执"
+            end repeat
+            return outputText
         end tell
     end run
     """#
+}
+
+public struct PhotoLibraryApplyError: LocalizedError {
+    public let confirmedCount: Int
+    public let uncertainAlbumName: String
+    public let underlyingMessage: String
+
+    public var errorDescription: String? {
+        "相册写入中断：之前的相册已确认加入 \(confirmedCount) 张；\(uncertainAlbumName) 的写入结果未知。"
+        + "后续相册未处理，已完成的写入没有回滚。请先检查 Photos 并保留原计划，再决定是否重试。\(underlyingMessage)"
+    }
 }

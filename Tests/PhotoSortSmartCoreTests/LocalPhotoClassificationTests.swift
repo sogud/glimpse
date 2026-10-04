@@ -187,26 +187,24 @@ final class LocalPhotoClassificationTests: XCTestCase {
         XCTAssertFalse(PhotoClassificationTaskState.undone.canStartOrContinueInference)
     }
 
-    func testLegacyFingerprintWithoutSchemeIdentifierLoadsAsStale() throws {
-        let legacy = Data(
+    func testFingerprintRequiresSchemeIdentifier() throws {
+        let missingScheme = Data(
             #"{"assetIdentifier":"photo-1","modelIdentifier":"vision-model","analyzerVersion":1,"schemeVersion":1}"#.utf8
         )
 
-        let fingerprint = try JSONDecoder().decode(PhotoClassificationFingerprint.self, from: legacy)
-
-        XCTAssertNil(fingerprint.schemeIdentifier)
+        XCTAssertThrowsError(try JSONDecoder().decode(PhotoClassificationFingerprint.self, from: missingScheme))
     }
 
-    func testCategoryTargetDictionaryDecodesLegacyStringKeys() throws {
-        let legacyTargets: [String: PhotoAlbumTarget] = ["pets": .newAlbum(name: "宠物")]
-        let data = try JSONEncoder().encode(legacyTargets)
+    func testCategoryTargetDictionaryRoundTripsQualifiedKeys() throws {
+        let original: [PhotoClassificationCategoryID: PhotoAlbumTarget] = ["ordinary:pets": .newAlbum(name: "普通照片·宠物")]
+        let data = try JSONEncoder().encode(original)
 
         let targets = try JSONDecoder().decode(
             [PhotoClassificationCategoryID: PhotoAlbumTarget].self,
             from: data
         )
 
-        XCTAssertEqual(targets["pets"], .newAlbum(name: "宠物"))
+        XCTAssertEqual(targets, original)
     }
 
     func testApplyPlanUsesReviewedCategoryAndSkipsDisabledTargets() {

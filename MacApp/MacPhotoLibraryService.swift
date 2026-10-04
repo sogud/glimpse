@@ -12,6 +12,7 @@ struct PhotoAlbumDescriptor: Hashable, Identifiable {
 enum MacPhotoLibraryError: LocalizedError {
     case insufficientPermission
     case albumNotFound
+    case ambiguousAlbumName(String)
     case imageUnavailable
     case partialApply(records: [PhotoAlbumMutationRecord], message: String)
 
@@ -21,6 +22,8 @@ enum MacPhotoLibraryError: LocalizedError {
             return "需要 Apple Photos 读写权限"
         case .albumNotFound:
             return "找不到选择的相册"
+        case .ambiguousAlbumName(let name):
+            return "存在多个同名相册：\(name)，请先在 Photos 中整理名称。"
         case .imageUnavailable:
             return "无法从 Photos 读取这张图片"
         case .partialApply(_, let message):
@@ -138,7 +141,7 @@ final class MacPhotoLibraryService {
         }.value
     }
 
-    func apply(_ additions: [PhotoAlbumAddition]) async throws -> [PhotoAlbumMutationRecord] {
+    func apply(_ additions: [PhotoAlbumAddition], onProgress: ([PhotoAlbumMutationRecord]) throws -> Void) async throws -> [PhotoAlbumMutationRecord] {
         var records: [PhotoAlbumMutationRecord] = []
         for (target, additionsForTarget) in Dictionary(grouping: additions, by: \.target) {
             do {
@@ -167,6 +170,7 @@ final class MacPhotoLibraryService {
                         albumWasCreatedByTask: resolved.wasCreated
                     )
                 })
+                try onProgress(records)
             } catch {
                 if !records.isEmpty {
                     throw MacPhotoLibraryError.partialApply(records: records, message: error.localizedDescription)

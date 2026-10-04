@@ -24,6 +24,8 @@ final class PhotoClassificationCoordinator: ObservableObject {
     private let taskStore: PhotoClassificationTaskStore
     private var lmStudio: LMStudioClient
     private var activeTask: Task<Void, Never>?
+    @Published private(set) var activeTaskID: UUID?
+    private var activeMutationTaskID: UUID?
     private var controlTask: Task<Void, Never>?
 
     convenience init() {
@@ -62,6 +64,13 @@ final class PhotoClassificationCoordinator: ObservableObject {
     func bootstrap() async {
         do {
             tasks = try taskStore.tasks()
+            for index in tasks.indices {
+                let recovered = tasks[index].state.recoveredAfterInterruption
+                if recovered != tasks[index].state {
+                    tasks[index].state = recovered
+                    try taskStore.save(tasks[index])
+                }
+            }
             selectedTaskID = selectedTaskID ?? tasks.first?.id
         } catch {
             errorMessage = error.localizedDescription
@@ -109,12 +118,15 @@ final class PhotoClassificationCoordinator: ObservableObject {
                     schemeVersion: isScreenshot(asset) ? screenshotScheme.version : ordinaryScheme.version
                 )
             }
-            let categories = ordinaryScheme.categories + screenshotScheme.categories
-            let targets = categories.reduce(
-                into: [PhotoClassificationCategoryID: PhotoAlbumTarget]()
-            ) { result, category in
-                guard category.isEnabled, result[category.id] == nil else { return }
-                result[category.id] = .newAlbum(name: category.name)
+            var targets = PhotoClassificationPlanner.defaultTargets(schemes: [ordinaryScheme, screenshotScheme])
+            let currentAlbums = try photoLibrary.albums()
+            for (identifier, target) in targets {
+                guard case .newAlbum(let name) = target else { continue }
+                let matching = currentAlbums.filter { $0.name == name }
+                guard matching.count <= 1 else { throw MacPhotoLibraryError.ambiguousAlbumName(name) }
+                if let album = matching.first {
+                    targets[identifier] = .existingAlbum(identifier: album.id, name: album.name)
+                }
             }
             let now = Date()
             let task = PhotoClassificationTask(
@@ -153,10 +165,13 @@ final class PhotoClassificationCoordinator: ObservableObject {
 
     func startOrContinue(taskID: UUID) {
         guard activeTask == nil,
+              activeMutationTaskID == nil,
               tasks.first(where: { $0.id == taskID })?.state.canStartOrContinueInference == true else { return }
+        activeTaskID = taskID
         activeTask = Task { [weak self] in
             await self?.run(taskID: taskID)
             self?.activeTask = nil
+            self?.activeTaskID = nil
         }
     }
 
@@ -178,8 +193,8 @@ final class PhotoClassificationCoordinator: ObservableObject {
     }
 
     func pause(taskID: UUID) {
+        guard activeTaskID == taskID else { return }
         activeTask?.cancel()
-        activeTask = nil
         updateTask(id: taskID) { task in
             task.state = .paused
         }
@@ -190,6 +205,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
         assetIdentifier: String,
         categoryIdentifier: PhotoClassificationCategoryID?
     ) {
+        guard tasks.first(where: { $0.id == taskID })?.state.canReview == true else { return }
         updateTask(id: taskID) { task in
             guard let index = task.results.firstIndex(where: { $0.id == assetIdentifier }) else { return }
             task.results[index].reviewedCategoryIdentifier = categoryIdentifier
@@ -202,6 +218,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
     }
 
     func setApproved(taskID: UUID, assetIdentifier: String, approved: Bool) {
+        guard tasks.first(where: { $0.id == taskID })?.state.canReview == true else { return }
         updateTask(id: taskID) { task in
             if approved {
                 task.approvedAssetIdentifiers.insert(assetIdentifier)
@@ -216,51 +233,79 @@ final class PhotoClassificationCoordinator: ObservableObject {
         categoryIdentifier: PhotoClassificationCategoryID,
         target: PhotoAlbumTarget
     ) {
+        guard tasks.first(where: { $0.id == taskID })?.state.canReview == true else { return }
         updateTask(id: taskID) { task in
             task.targetsByCategory[categoryIdentifier] = target
         }
     }
 
     func apply(taskID: UUID) async {
-        guard let task = tasks.first(where: { $0.id == taskID }), task.state == .readyForReview else { return }
-        updateTask(id: taskID) { $0.state = .applying }
+        guard activeTask == nil, activeMutationTaskID == nil,
+              let task = tasks.first(where: { $0.id == taskID }), task.state == .readyForReview else { return }
+        activeMutationTaskID = taskID
+        defer { activeMutationTaskID = nil }
+        guard updateTask(id: taskID, mutation: { $0.state = .applying }) else { return }
+        let previousMutations = task.mutations
         do {
             let additions = PhotoAlbumMutationPlanner.additions(
                 results: task.results,
                 approvedAssetIdentifiers: task.approvedAssetIdentifiers,
                 targetsByCategory: task.targetsByCategory
             )
-            let mutations = try await photoLibrary.apply(additions)
+            let mutations = try await photoLibrary.apply(additions) { records in
+                guard self.updateTask(id: taskID, mutation: { $0.mutations = previousMutations + records }) else {
+                    throw MacPhotoLibraryError.partialApply(records: records, message: "无法保存相册写入记录")
+                }
+            }
             updateTask(id: taskID) { task in
-                task.mutations = mutations
+                task.mutations = previousMutations + mutations
                 task.state = .applied
             }
             await refreshAlbums()
         } catch MacPhotoLibraryError.partialApply(let records, let message) {
             updateTask(id: taskID) { task in
-                task.mutations = records
-                task.state = .applied
+                task.mutations = previousMutations + records
+                task.state = .interrupted
             }
-            errorMessage = "部分照片已经写入相册，可以先撤销本次整理：\(message)"
+            errorMessage = "部分照片已经写入，当前相册结果未知；请检查 Photos 后再继续：\(message)"
             await refreshAlbums()
         } catch {
-            updateTask(id: taskID) { $0.state = .readyForReview }
+            updateTask(id: taskID) { $0.state = .interrupted }
             errorMessage = error.localizedDescription
         }
     }
 
     func undo(taskID: UUID, deleteEmptyCreatedAlbums: Bool) async {
-        guard let task = tasks.first(where: { $0.id == taskID }), task.state == .applied else { return }
+        guard activeMutationTaskID == nil, activeTask == nil,
+              let task = tasks.first(where: { $0.id == taskID }), task.state == .applied else { return }
+        activeMutationTaskID = taskID
+        defer { activeMutationTaskID = nil }
+        guard updateTask(id: taskID, mutation: { $0.state = .applying }) else { return }
         do {
             try await photoLibrary.undo(task.mutations, deleteEmptyCreatedAlbums: deleteEmptyCreatedAlbums)
             updateTask(id: taskID) { $0.state = .undone }
             await refreshAlbums()
         } catch {
+            updateTask(id: taskID) { $0.state = .interrupted }
             errorMessage = error.localizedDescription
         }
     }
 
+    func canDeleteTask(id: UUID) -> Bool {
+        tasks.first(where: { $0.id == id })?.state.canDelete == true
+            && activeTaskID != id && activeMutationTaskID != id
+    }
+
+    func acknowledgeInterruptedWrite(taskID: UUID) {
+        guard activeMutationTaskID == nil, tasks.first(where: { $0.id == taskID })?.state == .interrupted else { return }
+        updateTask(id: taskID) { $0.state = $0.state.afterManualInspection }
+    }
+
     func deleteTask(id: UUID) {
+        guard canDeleteTask(id: id) else {
+            errorMessage = "任务仍在运行或写入结果未知，请先完成操作并检查 Photos。"
+            return
+        }
         do {
             try taskStore.delete(id: id)
             tasks.removeAll { $0.id == id }
@@ -310,7 +355,8 @@ final class PhotoClassificationCoordinator: ObservableObject {
     private func run(taskID: UUID) async {
         guard var task = tasks.first(where: { $0.id == taskID }),
               task.state.canStartOrContinueInference else { return }
-        updateTask(id: taskID) { $0.state = .running }
+        task.state = .running
+        guard updateTask(id: taskID, mutation: { $0.state = .running }) else { return }
         let activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .idleSystemSleepDisabled],
             reason: "Glimpse 正在执行本地照片分类"
@@ -319,6 +365,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
 
         do {
             try await lmStudio.ensureReady(modelIdentifier: task.modelIdentifier)
+            try Task.checkCancellation()
             let currentAssets = try photoLibrary.assets(for: task.source)
             let assets = Dictionary(uniqueKeysWithValues: currentAssets.map { ($0.localIdentifier, $0) })
             let currentFingerprints = currentAssets.map { asset in
@@ -354,6 +401,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
                     task.approvedAssetIdentifiers.insert(result.id)
                 }
             }
+            try Task.checkCancellation()
             try taskStore.save(task)
             upsert(task)
             let pending = PhotoClassificationPlanner.assetsRequiringClassification(
@@ -367,13 +415,16 @@ final class PhotoClassificationCoordinator: ObservableObject {
                 let screenshot = isScreenshot(asset)
                 let scheme = screenshot ? task.screenshotScheme : task.ordinaryScheme
                 let jpegData = try await photoLibrary.jpegData(for: asset)
+                try Task.checkCancellation()
                 let ocrText = screenshot ? await photoLibrary.recognizedText(for: jpegData) : nil
-                let response = try await classifyWithRetry(
+                try Task.checkCancellation()
+                let response = try await classify(
                     jpegData: jpegData,
                     ocrText: ocrText,
                     scheme: scheme,
                     modelIdentifier: task.modelIdentifier
                 )
+                try Task.checkCancellation()
                 let result = PhotoClassificationResult(
                     fingerprint: fingerprint,
                     categoryIdentifier: response.categoryIdentifier,
@@ -395,6 +446,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
                 upsert(task)
             }
 
+            try Task.checkCancellation()
             task.state = .readyForReview
             task.updatedAt = Date()
             try taskStore.save(task)
@@ -404,12 +456,13 @@ final class PhotoClassificationCoordinator: ObservableObject {
             updateTask(id: taskID) { $0.state = .paused }
         } catch {
             updateTask(id: taskID) { $0.state = .paused }
+            if Task.isCancelled { return }
             errorMessage = error.localizedDescription
             sendNotification(title: "Glimpse 已暂停", body: error.localizedDescription)
         }
     }
 
-    private func classifyWithRetry(
+    private func classify(
         jpegData: Data,
         ocrText: String?,
         scheme: PhotoClassificationScheme,
@@ -422,25 +475,8 @@ final class PhotoClassificationCoordinator: ObservableObject {
                 scheme: scheme,
                 modelIdentifier: modelIdentifier
             )
-        } catch {
-            do {
-                return try await lmStudio.classify(
-                    jpegData: jpegData,
-                    ocrText: ocrText,
-                    scheme: scheme,
-                    modelIdentifier: modelIdentifier
-                )
-            } catch let error as PhotoClassificationResponseError {
-                _ = error
-                return PhotoClassificationResponse(categoryIdentifier: nil, reason: "模型结果无效，需要手动分类")
-            } catch let error as LMStudioError {
-                if case .invalidResponse = error {
-                    return PhotoClassificationResponse(categoryIdentifier: nil, reason: "模型结果无效，需要手动分类")
-                }
-                throw error
-            } catch {
-                throw error
-            }
+        } catch is PhotoClassificationResponseError {
+            return PhotoClassificationResponse(categoryIdentifier: nil, reason: "模型结果无效，需要手动分类")
         }
     }
 
@@ -456,15 +492,18 @@ final class PhotoClassificationCoordinator: ObservableObject {
         }
     }
 
-    private func updateTask(id: UUID, mutation: (inout PhotoClassificationTask) -> Void) {
-        guard var task = tasks.first(where: { $0.id == id }) else { return }
+    @discardableResult
+    private func updateTask(id: UUID, mutation: (inout PhotoClassificationTask) -> Void) -> Bool {
+        guard var task = tasks.first(where: { $0.id == id }) else { return false }
         mutation(&task)
         task.updatedAt = Date()
         do {
             try taskStore.save(task)
             upsert(task)
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 

@@ -14,7 +14,6 @@ enum LMStudioError: LocalizedError {
     case commandFailed(String)
     case noVisionModel
     case invalidResponse
-    case structuredOutputUnsupported
     case server(String)
 
     var errorDescription: String? {
@@ -29,8 +28,6 @@ enum LMStudioError: LocalizedError {
             return "没有找到支持图片输入的本地模型"
         case .invalidResponse:
             return "LM Studio 返回了无法识别的结果"
-        case .structuredOutputUnsupported:
-            return "当前模型不支持结构化输出"
         case .server(let message):
             return message
         }
@@ -38,6 +35,16 @@ enum LMStudioError: LocalizedError {
 }
 
 actor LMStudioClient {
+    private final class RejectRedirects: NSObject, URLSessionTaskDelegate {
+        func urlSession(
+            _ session: URLSession, task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            completionHandler(nil)
+        }
+    }
     private static let inferenceContextLength = 8_192
 
     private struct ModelsResponse: Decodable {
@@ -80,7 +87,7 @@ actor LMStudioClient {
     func loadedModels() async throws -> [String] {
         var request = URLRequest(url: endpoint.appendingPathComponent("models"))
         request.timeoutInterval = 3
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: RejectRedirects())
         try validate(response: response, data: data)
         return try JSONDecoder().decode(ModelsResponse.self, from: data).data.map(\.id)
     }
@@ -148,14 +155,7 @@ actor LMStudioClient {
                 ]
             ]
         ]
-        let content: String
-        do {
-            content = try await chatContent(body: body)
-        } catch LMStudioError.structuredOutputUnsupported {
-            var fallbackBody = body
-            fallbackBody.removeValue(forKey: "response_format")
-            content = try await chatContent(body: fallbackBody)
-        }
+        let content = try await chatContent(body: body)
         let normalized = content
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
@@ -172,12 +172,8 @@ actor LMStudioClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await session.data(for: request)
-        try validate(
-            response: response,
-            data: data,
-            allowsStructuredOutputFallback: body["response_format"] != nil
-        )
+        let (data, response) = try await session.data(for: request, delegate: RejectRedirects())
+        try validate(response: response, data: data)
         guard let content = try JSONDecoder().decode(ChatResponse.self, from: data).choices.first?.message.content else {
             throw LMStudioError.invalidResponse
         }
@@ -250,16 +246,15 @@ actor LMStudioClient {
 
     private func validate(
         response: URLResponse,
-        data: Data,
-        allowsStructuredOutputFallback: Bool = false
+        data: Data
     ) throws {
         guard let http = response as? HTTPURLResponse else {
             throw LMStudioError.invalidResponse
         }
+        guard !(300..<400 ~= http.statusCode) else {
+            throw LMStudioError.server("已拒绝 LM Studio HTTP 重定向：仅允许直接访问本机端点")
+        }
         guard 200..<300 ~= http.statusCode else {
-            if allowsStructuredOutputFallback && (http.statusCode == 400 || http.statusCode == 422) {
-                throw LMStudioError.structuredOutputUnsupported
-            }
             let message = String(data: data, encoding: .utf8) ?? "LM Studio 请求失败"
             throw LMStudioError.server(message)
         }
@@ -270,7 +265,7 @@ actor LMStudioClient {
               let host = endpoint.host?.lowercased() else {
             return false
         }
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
     }
 
     private static func lmsExecutableURL() -> URL? {

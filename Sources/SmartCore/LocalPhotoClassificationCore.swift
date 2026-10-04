@@ -148,43 +148,8 @@ struct PhotoClassificationFingerprint: Codable, Hashable, Sendable {
     let modificationDate: Date?
     let modelIdentifier: String
     let analyzerVersion: Int
-    let schemeIdentifier: UUID?
+    let schemeIdentifier: UUID
     let schemeVersion: Int
-
-    private enum CodingKeys: String, CodingKey {
-        case assetIdentifier
-        case modificationDate
-        case modelIdentifier
-        case analyzerVersion
-        case schemeIdentifier
-        case schemeVersion
-    }
-
-    init(
-        assetIdentifier: String,
-        modificationDate: Date?,
-        modelIdentifier: String,
-        analyzerVersion: Int,
-        schemeIdentifier: UUID?,
-        schemeVersion: Int
-    ) {
-        self.assetIdentifier = assetIdentifier
-        self.modificationDate = modificationDate
-        self.modelIdentifier = modelIdentifier
-        self.analyzerVersion = analyzerVersion
-        self.schemeIdentifier = schemeIdentifier
-        self.schemeVersion = schemeVersion
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        assetIdentifier = try container.decode(String.self, forKey: .assetIdentifier)
-        modificationDate = try container.decodeIfPresent(Date.self, forKey: .modificationDate)
-        modelIdentifier = try container.decode(String.self, forKey: .modelIdentifier)
-        analyzerVersion = try container.decode(Int.self, forKey: .analyzerVersion)
-        schemeIdentifier = try container.decodeIfPresent(UUID.self, forKey: .schemeIdentifier)
-        schemeVersion = try container.decode(Int.self, forKey: .schemeVersion)
-    }
 }
 
 struct PhotoClassificationResult: Codable, Hashable, Identifiable, Sendable {
@@ -201,6 +166,20 @@ struct PhotoClassificationResult: Codable, Hashable, Identifiable, Sendable {
 }
 
 enum PhotoClassificationPlanner {
+    static func albumName(schemeName: String, categoryName: String) -> String {
+        "\(schemeName)·\(categoryName)"
+    }
+
+    static func defaultTargets(schemes: [PhotoClassificationScheme]) -> [PhotoClassificationCategoryID: PhotoAlbumTarget] {
+        var targets: [PhotoClassificationCategoryID: PhotoAlbumTarget] = [:]
+        for scheme in schemes {
+            for category in scheme.categories where category.isEnabled {
+                targets[category.id] = .newAlbum(name: albumName(schemeName: scheme.name, categoryName: category.name))
+            }
+        }
+        return targets
+    }
+
     static func assetsRequiringClassification(
         current: [PhotoClassificationFingerprint],
         cached: [PhotoClassificationResult]
@@ -274,6 +253,17 @@ struct PhotoClassificationResponse: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case categoryIdentifier = "category"
         case reason
+    }
+
+    init(categoryIdentifier: PhotoClassificationCategoryID?, reason: String) {
+        self.categoryIdentifier = categoryIdentifier
+        self.reason = reason
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        categoryIdentifier = try container.decode(PhotoClassificationCategoryID?.self, forKey: .categoryIdentifier)
+        reason = try container.decode(String.self, forKey: .reason)
     }
 }
 
