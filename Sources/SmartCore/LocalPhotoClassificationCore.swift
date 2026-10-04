@@ -79,7 +79,8 @@ struct PhotoClassificationScheme: Codable, Hashable, Identifiable, Sendable {
             .init(id: .init(schemeKind: .ordinary, localIdentifier: "nature"), name: "自然风景", classificationDescription: "山水、海滩、天空、植物等自然景观", isEnabled: true),
             .init(id: .init(schemeKind: .ordinary, localIdentifier: "work-study"), name: "工作学习", classificationDescription: "白板、纸质资料、课堂或办公内容", isEnabled: true),
             .init(id: .init(schemeKind: .ordinary, localIdentifier: "products"), name: "商品物品", classificationDescription: "商品、设备或其他物品是画面主体", isEnabled: true),
-            .init(id: .init(schemeKind: .ordinary, localIdentifier: "other"), name: "其他", classificationDescription: "不适合以上任何分类", isEnabled: true)
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "other"), name: "其他", classificationDescription: "不适合以上任何分类", isEnabled: true),
+            .init(id: .init(schemeKind: .ordinary, localIdentifier: "delete-candidates"), name: "待删除", classificationDescription: "仅建议明显无用、严重模糊或无法阅读的图片；不能因是截图或含敏感资料就建议。无法确定价值时归入其他类别，绝不自动删除", isEnabled: true)
         ]
     )
 
@@ -97,7 +98,8 @@ struct PhotoClassificationScheme: Codable, Hashable, Identifiable, Sendable {
             .init(id: .init(schemeKind: .screenshot, localIdentifier: "maps"), name: "地图行程", classificationDescription: "地图、导航、车票、航班或行程", isEnabled: true),
             .init(id: .init(schemeKind: .screenshot, localIdentifier: "entertainment"), name: "娱乐梗图", classificationDescription: "影视、游戏、音乐、表情包或梗图", isEnabled: true),
             .init(id: .init(schemeKind: .screenshot, localIdentifier: "software"), name: "软件系统", classificationDescription: "软件界面、设置、报错或系统信息", isEnabled: true),
-            .init(id: .init(schemeKind: .screenshot, localIdentifier: "other"), name: "其他", classificationDescription: "不适合以上任何分类", isEnabled: true)
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "other"), name: "其他", classificationDescription: "不适合以上任何分类", isEnabled: true),
+            .init(id: .init(schemeKind: .screenshot, localIdentifier: "delete-candidates"), name: "待删除", classificationDescription: "仅建议明显无用、空白或无法阅读的截图；订单票据、工作资料和聊天记录默认保留，无法确定价值时归入其他类别，绝不自动删除", isEnabled: true)
         ]
     )
 
@@ -120,27 +122,6 @@ struct PhotoClassificationScheme: Codable, Hashable, Identifiable, Sendable {
         version += 1
     }
 
-    @discardableResult
-    mutating func namespaceLegacyCategoryIdentifiers() -> Bool {
-        var changed = false
-        categories = categories.map { category in
-            guard !category.id.rawValue.contains(":") else { return category }
-            changed = true
-            return PhotoClassificationCategory(
-                id: PhotoClassificationCategoryID(
-                    schemeKind: kind,
-                    localIdentifier: category.id.rawValue
-                ),
-                name: category.name,
-                classificationDescription: category.classificationDescription,
-                isEnabled: category.isEnabled
-            )
-        }
-        if changed {
-            version += 1
-        }
-        return changed
-    }
 }
 
 struct PhotoClassificationFingerprint: Codable, Hashable, Sendable {
@@ -156,25 +137,57 @@ struct PhotoClassificationResult: Codable, Hashable, Identifiable, Sendable {
     let fingerprint: PhotoClassificationFingerprint
     let categoryIdentifier: PhotoClassificationCategoryID?
     let reason: String
-    var reviewedCategoryIdentifier: PhotoClassificationCategoryID?
+    var review: PhotoClassificationReview = .modelSuggestion
 
     var id: String { fingerprint.assetIdentifier }
 
     var effectiveCategoryIdentifier: PhotoClassificationCategoryID? {
-        reviewedCategoryIdentifier ?? categoryIdentifier
+        switch review {
+        case .modelSuggestion: categoryIdentifier
+        case .manual(let categoryIdentifier): categoryIdentifier
+        }
     }
 }
 
+enum PhotoClassificationReview: Codable, Hashable, Sendable {
+    case modelSuggestion
+    case manual(PhotoClassificationCategoryID?)
+}
+
 enum PhotoClassificationPlanner {
-    static func albumName(schemeName: String, categoryName: String) -> String {
-        "\(schemeName)·\(categoryName)"
+    static func nextBatch(
+        current: [PhotoClassificationFingerprint], cached: [PhotoClassificationResult],
+        reserved: [PhotoClassificationFingerprint], limit: Int
+    ) throws -> [PhotoClassificationFingerprint] {
+        guard (1...100).contains(limit) else { throw PhotoClassificationBatchError.invalidLimit }
+        let completed = Set(cached.map(\.fingerprint))
+        let reservedIdentifiers = Set(reserved.map(\.assetIdentifier))
+        var selected: [PhotoClassificationFingerprint] = []
+        var selectedIdentifiers = Set<String>()
+        for fingerprint in current {
+            if completed.contains(fingerprint) || reservedIdentifiers.contains(fingerprint.assetIdentifier) { continue }
+            if !selectedIdentifiers.insert(fingerprint.assetIdentifier).inserted { continue }
+            selected.append(fingerprint)
+            if selected.count == limit { break }
+        }
+        return selected
     }
 
-    static func defaultTargets(schemes: [PhotoClassificationScheme]) -> [PhotoClassificationCategoryID: PhotoAlbumTarget] {
+    static func albumName(schemeName: String, category: PhotoClassificationCategory) -> String {
+        if category.id == "ordinary:delete-candidates" || category.id == "screenshot:delete-candidates" { return "待删除" }
+        return "\(schemeName)·\(category.name)"
+    }
+
+    static func defaultTargets(schemes: [PhotoClassificationScheme], existingAlbums: [PhotoAlbumDescriptor]) -> [PhotoClassificationCategoryID: PhotoAlbumTarget] {
         var targets: [PhotoClassificationCategoryID: PhotoAlbumTarget] = [:]
+        let albumsByName = Dictionary(grouping: existingAlbums, by: \.name)
         for scheme in schemes {
             for category in scheme.categories where category.isEnabled {
-                targets[category.id] = .newAlbum(name: albumName(schemeName: scheme.name, categoryName: category.name))
+                let name = albumName(schemeName: scheme.name, category: category)
+                let matches = albumsByName[name] ?? []
+                if matches.count > 1 { targets[category.id] = .skip }
+                else if let existing = matches.first { targets[category.id] = .existingAlbum(identifier: existing.id, name: name) }
+                else { targets[category.id] = .newAlbum(name: name) }
             }
         }
         return targets
@@ -205,17 +218,28 @@ enum PhotoClassificationPlanner {
             return PhotoClassificationResult(
                 fingerprint: fingerprint,
                 categoryIdentifier: cachedResult.categoryIdentifier,
-                reason: cachedResult.reason,
-                reviewedCategoryIdentifier: nil
+                reason: cachedResult.reason
             )
         }
     }
+}
+
+enum PhotoClassificationBatchError: LocalizedError {
+    case invalidLimit
+
+    var errorDescription: String? { "每批数量必须在 1 到 100 张之间" }
 }
 
 enum PhotoAlbumTarget: Codable, Hashable, Sendable {
     case newAlbum(name: String)
     case existingAlbum(identifier: String, name: String)
     case skip
+}
+
+struct PhotoAlbumDescriptor: Hashable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let assetCount: Int
 }
 
 struct PhotoAlbumAddition: Codable, Hashable, Sendable {

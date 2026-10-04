@@ -10,7 +10,9 @@ final class PhotoClassificationCoordinator: ObservableObject {
 
     @Published private(set) var tasks: [PhotoClassificationTask] = []
     @Published private(set) var albums: [PhotoAlbumDescriptor] = []
-    @Published private(set) var visionModels: [LMStudioModelDescriptor] = []
+    @Published private(set) var modelConnection: LMStudioConnectionState = .checking
+    @Published private(set) var isRefreshingEnvironment = false
+    @Published private(set) var accessiblePhotoCount = 0
     @Published private(set) var authorizationStatus: PHAuthorizationStatus
     @Published var selectedTaskID: UUID?
     @Published var isCreatingTask = false
@@ -26,7 +28,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
     private var activeTask: Task<Void, Never>?
     @Published private(set) var activeTaskID: UUID?
     private var activeMutationTaskID: UUID?
-    private var controlTask: Task<Void, Never>?
+    private var hasBootstrapped = false
 
     convenience init() {
         self.init(container: PhotoSortDataContainer.shared)
@@ -49,7 +51,6 @@ final class PhotoClassificationCoordinator: ObservableObject {
 
     deinit {
         activeTask?.cancel()
-        controlTask?.cancel()
     }
 
     var selectedTask: PhotoClassificationTask? {
@@ -61,7 +62,11 @@ final class PhotoClassificationCoordinator: ObservableObject {
         tasks.first(where: { $0.state == .running })
     }
 
+    var canChangeEnvironment: Bool { activeTask == nil && activeMutationTaskID == nil && !isRefreshingEnvironment }
+
     func bootstrap() async {
+        guard !hasBootstrapped else { return }
+        hasBootstrapped = true
         do {
             tasks = try taskStore.tasks()
             for index in tasks.indices {
@@ -77,25 +82,34 @@ final class PhotoClassificationCoordinator: ObservableObject {
         }
         await refreshEnvironment()
         requestNotificationPermission()
-        writeStatusSnapshot()
-        startControlInbox()
     }
 
     func requestPhotosPermission() async {
         authorizationStatus = await photoLibrary.requestAuthorization()
-        await refreshAlbums()
+        await refreshEnvironment()
     }
 
     func refreshEnvironment() async {
+        guard canChangeEnvironment else { return }
+        isRefreshingEnvironment = true
+        defer { isRefreshingEnvironment = false }
         authorizationStatus = photoLibrary.authorizationStatus
         await refreshAlbums()
+        if authorizationStatus == .authorized || authorizationStatus == .limited {
+            do { accessiblePhotoCount = try photoLibrary.assets(for: .allPhotos).count }
+            catch { errorMessage = error.localizedDescription }
+        } else {
+            accessiblePhotoCount = 0
+        }
+        modelConnection = .checking
         do {
-            visionModels = try await lmStudio.installedVisionModels()
-            if preferredModelIdentifier.isEmpty || !visionModels.contains(where: { $0.modelKey == preferredModelIdentifier }) {
-                preferredModelIdentifier = visionModels.first?.modelKey ?? ""
+            let models = try await lmStudio.visionModels()
+            modelConnection = .connected(models)
+            if !modelConnection.loadedModelIdentifiers.contains(preferredModelIdentifier) {
+                preferredModelIdentifier = modelConnection.loadedModelIdentifiers.first ?? ""
             }
         } catch {
-            errorMessage = error.localizedDescription
+            modelConnection = .unavailable(error.localizedDescription)
         }
     }
 
@@ -104,11 +118,19 @@ final class PhotoClassificationCoordinator: ObservableObject {
         title: String,
         modelIdentifier: String,
         ordinaryScheme: PhotoClassificationScheme,
-        screenshotScheme: PhotoClassificationScheme
+        screenshotScheme: PhotoClassificationScheme,
+        limit: Int = 10
     ) async -> UUID? {
         do {
+            guard canChangeEnvironment else {
+                errorMessage = "请先暂停当前分类并等待请求结束，再创建下一批。"
+                return nil
+            }
+            guard modelConnection.loadedModelIdentifiers.contains(modelIdentifier) else {
+                throw LMStudioError.modelNotLoaded(modelIdentifier)
+            }
             let assets = try photoLibrary.assets(for: source)
-            let fingerprints = assets.map { asset in
+            let currentFingerprints = assets.map { asset in
                 PhotoClassificationFingerprint(
                     assetIdentifier: asset.localIdentifier,
                     modificationDate: asset.modificationDate,
@@ -118,20 +140,22 @@ final class PhotoClassificationCoordinator: ObservableObject {
                     schemeVersion: isScreenshot(asset) ? screenshotScheme.version : ordinaryScheme.version
                 )
             }
-            var targets = PhotoClassificationPlanner.defaultTargets(schemes: [ordinaryScheme, screenshotScheme])
-            let currentAlbums = try photoLibrary.albums()
-            for (identifier, target) in targets {
-                guard case .newAlbum(let name) = target else { continue }
-                let matching = currentAlbums.filter { $0.name == name }
-                guard matching.count <= 1 else { throw MacPhotoLibraryError.ambiguousAlbumName(name) }
-                if let album = matching.first {
-                    targets[identifier] = .existingAlbum(identifier: album.id, name: album.name)
-                }
+            let history = try taskStore.tasks()
+            let fingerprints = try PhotoClassificationPlanner.nextBatch(
+                current: currentFingerprints, cached: history.flatMap(\.results),
+                reserved: history.flatMap { $0.state.reservesPhotos ? $0.assetFingerprints : [] }, limit: limit
+            )
+            guard !fingerprints.isEmpty else {
+                errorMessage = "这个范围没有下一批待分析照片。已有结果或未完成任务占用了这些照片，请先复核或继续已有任务。"
+                return nil
             }
+            let targets = PhotoClassificationPlanner.defaultTargets(
+                schemes: [ordinaryScheme, screenshotScheme], existingAlbums: try photoLibrary.albums()
+            )
             let now = Date()
             let task = PhotoClassificationTask(
                 id: UUID(),
-                title: title,
+                title: "\(title) · \(fingerprints.count) 张",
                 source: source,
                 state: .draft,
                 modelIdentifier: modelIdentifier,
@@ -176,9 +200,14 @@ final class PhotoClassificationCoordinator: ObservableObject {
     }
 
     func updateEndpoint() {
+        guard canChangeEnvironment else {
+            errorMessage = "分类或相册写入期间不能切换模型地址。"
+            return
+        }
         do {
             guard let url = URL(string: endpointText) else { throw LMStudioError.invalidEndpoint }
             lmStudio = try LMStudioClient(endpoint: url)
+            modelConnection = .checking
             UserDefaults.standard.set(endpointText, forKey: "lmStudioEndpoint")
             Task { await refreshEnvironment() }
         } catch {
@@ -207,13 +236,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
     ) {
         guard tasks.first(where: { $0.id == taskID })?.state.canReview == true else { return }
         updateTask(id: taskID) { task in
-            guard let index = task.results.firstIndex(where: { $0.id == assetIdentifier }) else { return }
-            task.results[index].reviewedCategoryIdentifier = categoryIdentifier
-            if categoryIdentifier == nil {
-                task.approvedAssetIdentifiers.remove(assetIdentifier)
-            } else {
-                task.approvedAssetIdentifiers.insert(assetIdentifier)
-            }
+            task.reviewCategory(assetIdentifier: assetIdentifier, categoryIdentifier: categoryIdentifier)
         }
     }
 
@@ -239,20 +262,20 @@ final class PhotoClassificationCoordinator: ObservableObject {
         }
     }
 
-    func apply(taskID: UUID) async {
+    func apply(_ confirmation: PhotoClassificationWriteConfirmation) async {
+        let taskID = confirmation.id
         guard activeTask == nil, activeMutationTaskID == nil,
               let task = tasks.first(where: { $0.id == taskID }), task.state == .readyForReview else { return }
+        guard confirmation.matches(task) else {
+            errorMessage = "复核内容已经改变，请重新检查相册清单并确认写入。"
+            return
+        }
         activeMutationTaskID = taskID
         defer { activeMutationTaskID = nil }
         guard updateTask(id: taskID, mutation: { $0.state = .applying }) else { return }
         let previousMutations = task.mutations
         do {
-            let additions = PhotoAlbumMutationPlanner.additions(
-                results: task.results,
-                approvedAssetIdentifiers: task.approvedAssetIdentifiers,
-                targetsByCategory: task.targetsByCategory
-            )
-            let mutations = try await photoLibrary.apply(additions) { records in
+            let mutations = try await photoLibrary.apply(confirmation.additions) { records in
                 guard self.updateTask(id: taskID, mutation: { $0.mutations = previousMutations + records }) else {
                     throw MacPhotoLibraryError.partialApply(records: records, message: "无法保存相册写入记录")
                 }
@@ -312,7 +335,6 @@ final class PhotoClassificationCoordinator: ObservableObject {
             if selectedTaskID == id {
                 selectedTaskID = tasks.first?.id
             }
-            writeStatusSnapshot()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -362,12 +384,13 @@ final class PhotoClassificationCoordinator: ObservableObject {
             reason: "Glimpse 正在执行本地照片分类"
         )
         defer { ProcessInfo.processInfo.endActivity(activity) }
+        let client = lmStudio
 
         do {
-            try await lmStudio.ensureReady(modelIdentifier: task.modelIdentifier)
+            try await client.ensureReady(modelIdentifier: task.modelIdentifier)
             try Task.checkCancellation()
-            let currentAssets = try photoLibrary.assets(for: task.source)
-            let assets = Dictionary(uniqueKeysWithValues: currentAssets.map { ($0.localIdentifier, $0) })
+            let assets = photoLibrary.assets(localIdentifiers: task.assetFingerprints.map(\.assetIdentifier))
+            let currentAssets = task.assetFingerprints.compactMap { assets[$0.assetIdentifier] }
             let currentFingerprints = currentAssets.map { asset in
                 PhotoClassificationFingerprint(
                     assetIdentifier: asset.localIdentifier,
@@ -378,10 +401,7 @@ final class PhotoClassificationCoordinator: ObservableObject {
                     schemeVersion: isScreenshot(asset) ? task.screenshotScheme.version : task.ordinaryScheme.version
                 )
             }
-            let currentIdentifiers = Set(currentFingerprints.map(\.assetIdentifier))
-            task.assetFingerprints = currentFingerprints
-            task.results.removeAll { !currentIdentifiers.contains($0.id) }
-            task.approvedAssetIdentifiers.formIntersection(currentIdentifiers)
+            task.refreshBatch(currentFingerprints)
             task.updatedAt = Date()
             let cachedResults = try taskStore.tasks().flatMap(\.results)
             let existingFingerprints = Set(task.results.map(\.fingerprint))
@@ -422,14 +442,14 @@ final class PhotoClassificationCoordinator: ObservableObject {
                     jpegData: jpegData,
                     ocrText: ocrText,
                     scheme: scheme,
-                    modelIdentifier: task.modelIdentifier
+                    modelIdentifier: task.modelIdentifier,
+                    client: client
                 )
                 try Task.checkCancellation()
                 let result = PhotoClassificationResult(
                     fingerprint: fingerprint,
                     categoryIdentifier: response.categoryIdentifier,
-                    reason: response.reason,
-                    reviewedCategoryIdentifier: nil
+                    reason: response.reason
                 )
                 if let index = task.results.firstIndex(where: { $0.id == result.id }) {
                     task.results[index] = result
@@ -466,10 +486,11 @@ final class PhotoClassificationCoordinator: ObservableObject {
         jpegData: Data,
         ocrText: String?,
         scheme: PhotoClassificationScheme,
-        modelIdentifier: String
+        modelIdentifier: String,
+        client: LMStudioClient
     ) async throws -> PhotoClassificationResponse {
         do {
-            return try await lmStudio.classify(
+            return try await client.classify(
                 jpegData: jpegData,
                 ocrText: ocrText,
                 scheme: scheme,
@@ -514,7 +535,6 @@ final class PhotoClassificationCoordinator: ObservableObject {
             tasks.insert(task, at: 0)
         }
         tasks.sort { $0.updatedAt > $1.updatedAt }
-        writeStatusSnapshot()
     }
 
     private func isScreenshot(_ asset: PHAsset) -> Bool {
@@ -534,20 +554,9 @@ final class PhotoClassificationCoordinator: ObservableObject {
         )
     }
 
-    private func writeStatusSnapshot() {
-        let snapshot = GlimpseControlStatus(tasks: tasks)
-        try? GlimpseControlFiles.write(snapshot)
-    }
-
     private static func savedScheme(forKey key: String) -> PhotoClassificationScheme? {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-        guard var scheme = try? JSONDecoder().decode(PhotoClassificationScheme.self, from: data) else {
-            return nil
-        }
-        if scheme.namespaceLegacyCategoryIdentifiers() {
-            saveScheme(scheme, forKey: key)
-        }
-        return scheme
+        return try? JSONDecoder().decode(PhotoClassificationScheme.self, from: data)
     }
 
     private static func saveScheme(_ scheme: PhotoClassificationScheme, forKey key: String) {
@@ -568,49 +577,4 @@ final class PhotoClassificationCoordinator: ObservableObject {
         }
     }
 
-    private func startControlInbox() {
-        guard controlTask == nil else { return }
-        controlTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.consumeControlCommands()
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
-    }
-
-    private func consumeControlCommands() async {
-        do {
-            for command in try GlimpseControlInbox().consume() {
-                switch command.action {
-                case .createRecent:
-                    guard let days = command.recentDays,
-                          [7, 30, 90].contains(days),
-                          let modelIdentifier = command.modelIdentifier ?? visionModels.first?.modelKey else {
-                        continue
-                    }
-                    if let taskID = await createTask(
-                        source: .recentDays(days),
-                        title: "最近 \(days) 天",
-                        modelIdentifier: modelIdentifier,
-                        ordinaryScheme: .ordinaryDefault,
-                        screenshotScheme: .screenshotDefault
-                    ) {
-                        startOrContinue(taskID: taskID)
-                    }
-                case .continueTask:
-                    if let taskID = command.taskID {
-                        startOrContinue(taskID: taskID)
-                    }
-                case .reviewTask:
-                    if let taskID = command.taskID {
-                        selectedTaskID = taskID
-                        isCreatingTask = false
-                        NSApplication.shared.activate(ignoringOtherApps: true)
-                    }
-                }
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 }

@@ -12,5 +12,8 @@ swiftc Sources/PhotosCLIKit/CommandRunner.swift Tests/CommandRunnerChecks.swift 
 swiftc Sources/SmartCore/LocalPhotoClassificationCore.swift Sources/SmartCore/LocalPhotoClassificationTask.swift \
     Tests/NativeTaskStateChecks.swift -o "$check_directory/native"
 "$check_directory/native"
+swiftc Sources/SmartCore/LocalPhotoClassificationCore.swift Sources/SmartCore/LocalPhotoClassificationTask.swift \
+    Tests/NativeGUIWorkflowChecks.swift -o "$check_directory/native-gui"
+"$check_directory/native-gui"
 swiftc -frontend -parse MacApp/PhotoClassificationCoordinator.swift MacApp/PhotoClassificationViews.swift MacApp/MacPhotoLibraryService.swift
 git diff --check

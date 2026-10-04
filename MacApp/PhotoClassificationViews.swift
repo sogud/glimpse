@@ -20,13 +20,21 @@ struct GlimpseMacRootView: View {
                     }
                 }
             }
+            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
             .navigationTitle("Glimpse")
             .toolbar {
+                Button {
+                    Task { await coordinator.refreshEnvironment() }
+                } label: {
+                    Label("刷新照片和模型状态", systemImage: "arrow.clockwise")
+                }
+                .disabled(!coordinator.canChangeEnvironment)
                 Button {
                     coordinator.isCreatingTask = true
                 } label: {
                     Label("新建分类任务", systemImage: "plus")
                 }
+                .keyboardShortcut("n", modifiers: .command)
             }
         } detail: {
             detail
@@ -63,6 +71,9 @@ struct GlimpseMacRootView: View {
                     : "会删除任务进度和分类结果，不会修改 Apple Photos。"
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await coordinator.refreshEnvironment() }
+        }
     }
 
     @ViewBuilder
@@ -89,9 +100,10 @@ private struct TaskSidebarRow: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(task.title)
                 .lineLimit(1)
-            Text("\(task.results.count)/\(task.assetFingerprints.count) · \(task.state.localizedTitle)")
+            Text("\(task.progress.analyzed)/\(task.progress.total) · \(task.state.localizedTitle)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .monospacedDigit()
         }
         .padding(.vertical, 3)
     }
@@ -104,17 +116,27 @@ private struct PhotosPermissionView: View {
         ContentUnavailableView {
             Label("需要 Apple Photos 权限", systemImage: "photo.badge.exclamationmark")
         } description: {
-            Text("Glimpse 只在本机读取缩略图，并且只在你确认后向相册添加照片。")
+            Text("图片只交给本机模型识别。分析不会修改 Photos，只有复核并确认后才加入相册。iCloud 照片可能需要系统下载。")
         } actions: {
-            Button("授权访问") {
-                Task { await coordinator.requestPhotosPermission() }
+            if coordinator.authorizationStatus == .notDetermined {
+                Button("授权访问") {
+                    Task { await coordinator.requestPhotosPermission() }
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Button("打开系统设置") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
+                }
+                .buttonStyle(.borderedProminent)
+                Text("在“隐私与安全性 → 照片”中允许 Glimpse 访问，再回到这里刷新。")
+                    .font(.caption)
             }
-            .buttonStyle(.borderedProminent)
         }
     }
 }
 
 private enum NewTaskSourceMode: String, CaseIterable, Identifiable {
+    case allPhotos
     case recent7
     case recent30
     case recent90
@@ -125,6 +147,7 @@ private enum NewTaskSourceMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .allPhotos: "全图库下一批"
         case .recent7: "最近 7 天"
         case .recent30: "最近 30 天"
         case .recent90: "最近 90 天"
@@ -136,19 +159,36 @@ private enum NewTaskSourceMode: String, CaseIterable, Identifiable {
 
 private struct NewClassificationTaskView: View {
     @EnvironmentObject private var coordinator: PhotoClassificationCoordinator
-    @State private var sourceMode: NewTaskSourceMode = .recent7
+    @State private var sourceMode: NewTaskSourceMode = .allPhotos
+    @State private var batchSize = 10
     @State private var albumIdentifier = ""
     @State private var startDate = Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date()
     @State private var endDate = Date()
 
     var body: some View {
         Form {
+            Section {
+                Label("本机识图 · 确认后才写相册", systemImage: "lock.shield")
+                Text("可访问照片：\(coordinator.accessiblePhotoCount) 张\(coordinator.authorizationStatus == .limited ? "（仅授权范围）" : "")")
+                    .monospacedDigit()
+                Text("这是原生 App 的独立记录，不共享 CLI 分类进度。下一批会跳过已有结果及未完成任务。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section("照片范围") {
                 Picker("来源", selection: $sourceMode) {
                     ForEach(NewTaskSourceMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
+                Picker("本批数量", selection: $batchSize) {
+                    Text("10 张 · 先试一批").tag(10)
+                    Text("50 张").tag(50)
+                    Text("100 张").tag(100)
+                }
+                Text("图片逐张串行分析；每次创建只处理这一批，不自动写入，也不会因继续任务增加新照片。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 if sourceMode == .album {
                     Picker("相册", selection: $albumIdentifier) {
                         Text("请选择").tag("")
@@ -162,29 +202,7 @@ private struct NewClassificationTaskView: View {
                 }
             }
 
-            Section("本地模型") {
-                HStack {
-                    TextField("LM Studio 地址", text: $coordinator.endpointText)
-                    Button("应用") { coordinator.updateEndpoint() }
-                }
-                if coordinator.visionModels.isEmpty {
-                    ContentUnavailableView(
-                        "没有发现多模态模型",
-                        systemImage: "brain.head.profile",
-                        description: Text("请先在 LM Studio 下载支持图片输入的模型。")
-                    )
-                } else {
-                    Picker("模型", selection: $coordinator.preferredModelIdentifier) {
-                        Text("请选择").tag("")
-                        ForEach(coordinator.visionModels) { model in
-                            Text(model.displayName).tag(model.modelKey)
-                        }
-                    }
-                }
-                Text("开始任务时才会启动 LM Studio；推理只连接 localhost。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            modelSection
 
             ClassificationSchemeEditor(
                 scheme: coordinator.savedOrdinaryScheme,
@@ -202,7 +220,7 @@ private struct NewClassificationTaskView: View {
             Section {
                 HStack {
                     Spacer()
-                    Button("创建任务") {
+                    Button("创建下一批任务") {
                         Task {
                             guard let sourceAndTitle else { return }
                             _ = await coordinator.createTask(
@@ -210,23 +228,74 @@ private struct NewClassificationTaskView: View {
                                 title: sourceAndTitle.title,
                                 modelIdentifier: coordinator.preferredModelIdentifier,
                                 ordinaryScheme: coordinator.savedOrdinaryScheme,
-                                screenshotScheme: coordinator.savedScreenshotScheme
+                                screenshotScheme: coordinator.savedScreenshotScheme,
+                                limit: batchSize
                             )
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(coordinator.preferredModelIdentifier.isEmpty || sourceAndTitle == nil)
+                    .disabled(!coordinator.canChangeEnvironment || sourceAndTitle == nil
+                              || !coordinator.modelConnection.loadedModelIdentifiers.contains(coordinator.preferredModelIdentifier))
                 }
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("新建分类任务")
+        .navigationTitle("整理下一批照片")
         .padding(.horizontal, 24)
         .onChange(of: coordinator.preferredModelIdentifier) { _, _ in coordinator.persistSchemePreferences() }
     }
 
+    private var modelSection: some View {
+        Section("LM Studio 本地模型") {
+            HStack {
+                TextField("本机地址", text: $coordinator.endpointText)
+                Button("应用地址") { coordinator.updateEndpoint() }
+                Button("刷新") { Task { await coordinator.refreshEnvironment() } }
+            }
+            switch coordinator.modelConnection {
+            case .checking:
+                HStack { ProgressView().controlSize(.small); Text("正在检查本地服务…") }
+            case .unavailable(let message):
+                Label("本地服务未连接", systemImage: "exclamationmark.circle")
+                    .foregroundStyle(.orange)
+                Text(message).font(.caption).textSelection(.enabled)
+                Text("请在 LM Studio 启动本地服务，加载已下载的视觉模型，再点击刷新。无需重新下载模型。")
+                    .font(.caption).foregroundStyle(.secondary)
+            case .connected(let models):
+                Label("本地服务已连接", systemImage: "checkmark.circle")
+                    .foregroundStyle(.green)
+                if models.isEmpty {
+                    Text("服务没有返回支持图片输入的模型。请在 LM Studio 检查模型和 runtime，再刷新。")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Picker("视觉模型", selection: $coordinator.preferredModelIdentifier) {
+                        Text("选择已加载实例").tag("")
+                        ForEach(models) { model in
+                            if model.loadedInstances.isEmpty {
+                                Text("\(model.displayName) · 已下载，未加载").tag(model.key).disabled(true)
+                            } else {
+                                ForEach(model.loadedInstances) { instance in
+                                    Text("\(model.displayName) · 已加载（\(instance.id)）").tag(instance.id)
+                                }
+                            }
+                        }
+                    }
+                    if coordinator.modelConnection.loadedModelIdentifiers.isEmpty {
+                        Text("模型已下载，但尚未加载。请在 LM Studio 加载后刷新。")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
+            }
+            Text("只连接本机回环地址；不自动下载、加载模型或切换模型重试。需要 LM Studio 0.4+。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .disabled(!coordinator.canChangeEnvironment)
+    }
+
     private var sourceAndTitle: (source: PhotoClassificationSourceScope, title: String)? {
         switch sourceMode {
+        case .allPhotos:
+            return (.allPhotos, "全图库下一批")
         case .recent7:
             return (.recentDays(7), "最近 7 天")
         case .recent30:
@@ -312,6 +381,7 @@ private struct ClassificationCategoryEditorRow: View {
 private struct ClassificationProgressView: View {
     @EnvironmentObject private var coordinator: PhotoClassificationCoordinator
     let task: PhotoClassificationTask
+    private var progress: PhotoClassificationTaskProgress { task.progress }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -321,23 +391,31 @@ private struct ClassificationProgressView: View {
             Text(task.title)
                 .font(.largeTitle.bold())
             ProgressView(
-                value: Double(task.results.count),
-                total: Double(max(task.assetFingerprints.count, 1))
+                value: Double(progress.analyzed),
+                total: Double(max(progress.total, 1))
             )
             .frame(maxWidth: 520)
-            Text("已处理 \(task.results.count) / \(task.assetFingerprints.count) 张")
+            Text("已分析 \(progress.analyzed) / \(progress.total) 张")
                 .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Text("已有类别 \(progress.classified) · 待分类 \(progress.needsReview) · 未分析 \(progress.remaining)")
+                .font(.callout).monospacedDigit()
+            Text("分类结果只保存在本机，复核并确认后才写入 Apple Photos。")
+                .font(.caption).foregroundStyle(.secondary)
 
             HStack {
                 if task.state == .running {
                     Button("暂停") { coordinator.pause(taskID: task.id) }
+                } else if coordinator.activeTaskID == task.id {
+                    ProgressView().controlSize(.small)
+                    Text("正在暂停，等待当前请求退出…")
                 } else {
                     Button(task.results.isEmpty ? "开始分类" : "继续分类") {
                         coordinator.startOrContinue(taskID: task.id)
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(task.assetFingerprints.isEmpty)
-                    .disabled(coordinator.activeTaskID != nil)
+                    .disabled(!coordinator.canChangeEnvironment)
                 }
             }
             if task.assetFingerprints.isEmpty {
@@ -355,7 +433,7 @@ private struct ClassificationReviewView: View {
     let task: PhotoClassificationTask
     @State private var selectedAssets = Set<String>()
     @State private var inspectedResult: PhotoClassificationResult?
-    @State private var confirmingApply = false
+    @State private var writeConfirmation: PhotoClassificationWriteConfirmation?
     @State private var confirmingUndo = false
 
     private var categories: [ReviewCategory] {
@@ -371,18 +449,24 @@ private struct ClassificationReviewView: View {
             HStack {
                 VStack(alignment: .leading) {
                     Text(task.title).font(.title.bold())
-                    Text("\(task.results.count) 张 · \(task.state.localizedTitle)")
+                    Text("已分析 \(task.progress.analyzed) 张 · 待分类 \(task.progress.needsReview) 张 · \(task.state.localizedTitle)")
                         .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
                 Spacer()
                 if task.state == .readyForReview {
-                    Button("确认写入相册") { confirmingApply = true }
+                    Button("复核后写入（\(task.writeConfirmation?.additions.count ?? 0) 张）") {
+                        writeConfirmation = task.writeConfirmation
+                    }
                         .buttonStyle(.borderedProminent)
+                        .disabled(task.writeConfirmation == nil || !coordinator.canChangeEnvironment)
                 } else if task.state == .applying {
                     ProgressView().controlSize(.small)
-                    Text("正在写入 Photos")
+                    Text("正在更新 Apple Photos")
                 } else if task.state == .applied {
+                    Text("新增 \(task.mutations.count) 条相册归属").font(.caption)
                     Button("撤销本次整理") { confirmingUndo = true }
+                        .disabled(task.mutations.isEmpty || !coordinator.canChangeEnvironment)
                 } else if task.state == .interrupted {
                     Text("上次 Photos 操作中断，请先检查相册；此任务不能重试写入或撤销。")
                     Button("已检查，关闭任务") { coordinator.acknowledgeInterruptedWrite(taskID: task.id) }
@@ -425,7 +509,6 @@ private struct ClassificationReviewView: View {
                         categoryIdentifier: category.id,
                         title: category.displayName,
                         results: task.results.filter { $0.effectiveCategoryIdentifier == category.id },
-                        categories: categories,
                         selectedAssets: $selectedAssets,
                         inspectedResult: $inspectedResult
                     )
@@ -435,21 +518,19 @@ private struct ClassificationReviewView: View {
                     categoryIdentifier: nil,
                     title: "待分类",
                     results: task.results.filter { $0.effectiveCategoryIdentifier == nil },
-                    categories: categories,
                     selectedAssets: $selectedAssets,
                     inspectedResult: $inspectedResult
                 )
             }
         }
         .sheet(item: $inspectedResult) { result in
-            PhotoClassificationInspector(task: task, result: result, categories: categories)
+            PhotoClassificationInspector(task: task, result: result)
                 .environmentObject(coordinator)
         }
-        .alert("确认写入 Apple Photos？", isPresented: $confirmingApply) {
-            Button("取消", role: .cancel) {}
-            Button("确认写入") { Task { await coordinator.apply(taskID: task.id) } }
-        } message: {
-            Text("只会创建或添加已确认的相册归属，不会删除照片或移除原有归属。")
+        .sheet(item: $writeConfirmation) { confirmation in
+            PhotoWriteConfirmationView(confirmation: confirmation) {
+                Task { await coordinator.apply(confirmation) }
+            }
         }
         .alert("撤销本次整理", isPresented: $confirmingUndo) {
             Button("取消", role: .cancel) {}
@@ -464,6 +545,9 @@ private struct ClassificationReviewView: View {
         }
         .onAppear { selectedAssets.removeAll() }
         .onChange(of: task.id) { _, _ in selectedAssets.removeAll() }
+        .onChange(of: task.state) { _, state in
+            if !state.canReview { selectedAssets.removeAll(); writeConfirmation = nil }
+        }
     }
 
     private func moveSelected(to categoryIdentifier: PhotoClassificationCategoryID?) {
@@ -475,6 +559,56 @@ private struct ClassificationReviewView: View {
             )
         }
         selectedAssets.removeAll()
+    }
+}
+
+private struct PhotoWriteConfirmationView: View {
+    @Environment(\.dismiss) private var dismiss
+    let confirmation: PhotoClassificationWriteConfirmation
+    let onConfirm: () -> Void
+
+    private var albums: [PhotoAlbumTarget] {
+        confirmation.albumCounts.keys.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label("确认写入 Apple Photos", systemImage: "photo.on.rectangle.angled")
+                .font(.title2.bold())
+            Text("将 \(confirmation.additions.count) 张照片加入 \(albums.count) 个相册。")
+                .monospacedDigit()
+            ScrollView {
+                VStack(spacing: 12) {
+                    ForEach(albums, id: \.self) { album in
+                        HStack {
+                            Text(album.displayName)
+                            Spacer()
+                            Text("\(confirmation.albumCounts[album] ?? 0) 张").monospacedDigit()
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+            Text("只新增相册归属，不删除照片，不移除原有归属。“待删除”仍然只是需要人工检查的建议。")
+                .font(.callout).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("取消", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("确认写入") { dismiss(); onConfirm() }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
+    }
+}
+
+private extension PhotoAlbumTarget {
+    var displayName: String {
+        switch self {
+        case .newAlbum(let name), .existingAlbum(_, let name): name
+        case .skip: "本次跳过"
+        }
     }
 }
 
@@ -496,11 +630,11 @@ private struct TargetAlbumMappingView: View {
                                 set: { coordinator.setTarget(taskID: task.id, categoryIdentifier: category.id, target: $0) }
                             )
                         ) {
-                            Text("新建“\(PhotoClassificationPlanner.albumName(schemeName: category.schemeName, categoryName: category.category.name))”").tag(
-                                PhotoAlbumTarget.newAlbum(name: PhotoClassificationPlanner.albumName(schemeName: category.schemeName, categoryName: category.category.name))
+                            Text("新建“\(PhotoClassificationPlanner.albumName(schemeName: category.schemeName, category: category.category))”").tag(
+                                PhotoAlbumTarget.newAlbum(name: PhotoClassificationPlanner.albumName(schemeName: category.schemeName, category: category.category))
                             )
                             ForEach(coordinator.albums) { album in
-                                Text("已有：\(album.name)").tag(
+                                Text("已有：\(album.name)（\(album.assetCount) 张 · \(album.id.prefix(8))）").tag(
                                     PhotoAlbumTarget.existingAlbum(identifier: album.id, name: album.name)
                                 )
                             }
@@ -513,6 +647,8 @@ private struct TargetAlbumMappingView: View {
                 }
             }
             .padding(.top, 10)
+            Text("同名相册不唯一时默认跳过，请明确选择目标。相册名、现有数量和标识用于区分同名项。")
+                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
@@ -525,7 +661,6 @@ private struct ClassificationGroupSection: View {
     let categoryIdentifier: PhotoClassificationCategoryID?
     let title: String
     let results: [PhotoClassificationResult]
-    let categories: [ReviewCategory]
     @Binding var selectedAssets: Set<String>
     @Binding var inspectedResult: PhotoClassificationResult?
 
@@ -540,37 +675,45 @@ private struct ClassificationGroupSection: View {
                 }
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                     ForEach(results) { result in
-                        PhotoClassificationCard(
-                            task: task,
-                            result: result,
-                            categories: categories,
-                            isSelected: selectedAssets.contains(result.id),
-                            onToggleSelection: {
-                                if selectedAssets.contains(result.id) {
-                                    selectedAssets.remove(result.id)
-                                } else {
-                                    selectedAssets.insert(result.id)
-                                }
-                            },
-                            onInspect: { inspectedResult = result }
-                        )
-                        .draggable(result.id)
+                        if task.state.canReview {
+                            card(for: result).draggable(result.id)
+                        } else {
+                            card(for: result)
+                        }
                     }
                 }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 28)
             .dropDestination(for: String.self) { identifiers, _ in
+                guard task.state.canReview else { return false }
+                var accepted = false
                 for identifier in identifiers {
+                    guard let result = task.results.first(where: { $0.id == identifier }),
+                          let scheme = task.scheme(for: result) else { continue }
+                    if let categoryIdentifier,
+                       !scheme.categories.contains(where: { $0.id == categoryIdentifier && $0.isEnabled }) { continue }
                     coordinator.updateCategory(
                         taskID: task.id,
                         assetIdentifier: identifier,
                         categoryIdentifier: categoryIdentifier
                     )
+                    accepted = true
                 }
-                return true
+                return accepted
             }
         }
+    }
+
+    private func card(for result: PhotoClassificationResult) -> some View {
+        PhotoClassificationCard(
+            task: task, result: result, isSelected: selectedAssets.contains(result.id),
+            onToggleSelection: {
+                if selectedAssets.contains(result.id) { selectedAssets.remove(result.id) }
+                else { selectedAssets.insert(result.id) }
+            },
+            onInspect: { inspectedResult = result }
+        )
     }
 }
 
@@ -578,7 +721,6 @@ private struct PhotoClassificationCard: View {
     @EnvironmentObject private var coordinator: PhotoClassificationCoordinator
     let task: PhotoClassificationTask
     let result: PhotoClassificationResult
-    let categories: [ReviewCategory]
     let isSelected: Bool
     let onToggleSelection: () -> Void
     let onInspect: () -> Void
@@ -594,11 +736,15 @@ private struct PhotoClassificationCard: View {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title2)
                         .symbolRenderingMode(.palette)
-                        .foregroundStyle(isSelected ? Color.white : Color.white, isSelected ? Color.accentColor : Color.black.opacity(0.35))
+                        .foregroundStyle(Color.white, isSelected ? Color.accentColor : Color.black.opacity(0.35))
                 }
                 .buttonStyle(.plain)
                 .padding(8)
+                .disabled(!task.state.canReview)
+                .accessibilityLabel(isSelected ? "取消批量选择" : "选择照片")
             }
+            Text(task.scheme(for: result)?.name ?? "未知方案")
+                .font(.caption.weight(.medium)).foregroundStyle(.tint)
             Text(result.reason)
                 .font(.caption)
                 .lineLimit(2)
@@ -607,12 +753,19 @@ private struct PhotoClassificationCard: View {
                 get: { result.effectiveCategoryIdentifier },
                 set: { coordinator.updateCategory(taskID: task.id, assetIdentifier: result.id, categoryIdentifier: $0) }
             )) {
-                Text("待分类").tag(String?.none)
-                ForEach(categories) { category in
-                    Text(category.displayName).tag(Optional(category.id))
+                Text("待分类").tag(PhotoClassificationCategoryID?.none)
+                ForEach(task.scheme(for: result)?.categories.filter(\.isEnabled) ?? []) { category in
+                    Text(category.name).tag(Optional(category.id))
                 }
             }
             .labelsHidden()
+            .disabled(!task.state.canReview)
+            Toggle("写入相册", isOn: Binding(
+                get: { task.approvedAssetIdentifiers.contains(result.id) },
+                set: { coordinator.setApproved(taskID: task.id, assetIdentifier: result.id, approved: $0) }
+            ))
+            .toggleStyle(.checkbox)
+            .disabled(!task.state.canReview || result.effectiveCategoryIdentifier == nil)
         }
         .padding(10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
@@ -624,7 +777,9 @@ private struct PhotoClassificationInspector: View {
     @Environment(\.dismiss) private var dismiss
     let task: PhotoClassificationTask
     let result: PhotoClassificationResult
-    let categories: [ReviewCategory]
+
+    private var currentTask: PhotoClassificationTask { coordinator.tasks.first(where: { $0.id == task.id }) ?? task }
+    private var currentResult: PhotoClassificationResult { currentTask.results.first(where: { $0.id == result.id }) ?? result }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -635,17 +790,18 @@ private struct PhotoClassificationInspector: View {
             }
             AsyncPhotoThumbnail(assetIdentifier: result.id, longestEdge: 1200)
                 .frame(maxWidth: 900, maxHeight: 600)
-            Text(result.reason).foregroundStyle(.secondary)
+            Text(currentResult.reason).foregroundStyle(.secondary)
             Picker("主分类", selection: Binding(
-                get: { result.effectiveCategoryIdentifier },
+                get: { currentResult.effectiveCategoryIdentifier },
                 set: { coordinator.updateCategory(taskID: task.id, assetIdentifier: result.id, categoryIdentifier: $0) }
             )) {
-                Text("待分类").tag(String?.none)
-                ForEach(categories) { category in
-                    Text(category.displayName).tag(Optional(category.id))
+                Text("待分类").tag(PhotoClassificationCategoryID?.none)
+                ForEach(currentTask.scheme(for: currentResult)?.categories.filter(\.isEnabled) ?? []) { category in
+                    Text(category.name).tag(Optional(category.id))
                 }
             }
             .frame(maxWidth: 320)
+            .disabled(!currentTask.state.canReview)
         }
         .padding(24)
         .frame(minWidth: 760, minHeight: 620)

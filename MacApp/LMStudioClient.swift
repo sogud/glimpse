@@ -1,18 +1,42 @@
 import Foundation
 
-struct LMStudioModelDescriptor: Codable, Hashable, Identifiable {
-    let modelKey: String
-    let displayName: String
-    let vision: Bool?
+struct LMStudioModelDescriptor: Decodable, Hashable, Identifiable, Sendable {
+    struct Capabilities: Decodable, Hashable, Sendable { let vision: Bool }
+    struct LoadedInstance: Decodable, Hashable, Identifiable, Sendable { let id: String }
 
-    var id: String { modelKey }
+    let type: String
+    let key: String
+    let displayName: String
+    let capabilities: Capabilities?
+    let loadedInstances: [LoadedInstance]
+    var id: String { key }
+
+    private enum CodingKeys: String, CodingKey {
+        case type, key, capabilities
+        case displayName = "display_name"
+        case loadedInstances = "loaded_instances"
+    }
+}
+
+enum LMStudioConnectionState: Equatable, Sendable {
+    case checking
+    case connected([LMStudioModelDescriptor])
+    case unavailable(String)
+
+    var loadedModelIdentifiers: [String] {
+        if case .connected(let models) = self { return models.flatMap { $0.loadedInstances.map(\.id) } }
+        return []
+    }
+
+    var visionModels: [LMStudioModelDescriptor] {
+        if case .connected(let models) = self { return models }
+        return []
+    }
 }
 
 enum LMStudioError: LocalizedError {
     case invalidEndpoint
-    case commandUnavailable
-    case commandFailed(String)
-    case noVisionModel
+    case modelNotLoaded(String)
     case invalidResponse
     case server(String)
 
@@ -20,12 +44,8 @@ enum LMStudioError: LocalizedError {
         switch self {
         case .invalidEndpoint:
             return "LM Studio 地址必须是 localhost 或本机回环地址"
-        case .commandUnavailable:
-            return "没有找到 LM Studio CLI（lms）"
-        case .commandFailed(let message):
-            return message
-        case .noVisionModel:
-            return "没有找到支持图片输入的本地模型"
+        case .modelNotLoaded(let identifier):
+            return "模型尚未加载：\(identifier)。请在 LM Studio 加载视觉模型并启动本地服务，再点击刷新。"
         case .invalidResponse:
             return "LM Studio 返回了无法识别的结果"
         case .server(let message):
@@ -45,14 +65,8 @@ actor LMStudioClient {
             completionHandler(nil)
         }
     }
-    private static let inferenceContextLength = 8_192
-
     private struct ModelsResponse: Decodable {
-        struct Model: Decodable {
-            let id: String
-        }
-
-        let data: [Model]
+        let models: [LMStudioModelDescriptor]
     }
 
     private struct ChatResponse: Decodable {
@@ -78,34 +92,24 @@ actor LMStudioClient {
         self.session = session
     }
 
-    func installedVisionModels() async throws -> [LMStudioModelDescriptor] {
-        let data = try await runLMS(["ls", "--json"])
-        return try JSONDecoder().decode([LMStudioModelDescriptor].self, from: data)
-            .filter { $0.vision == true }
-    }
-
-    func loadedModels() async throws -> [String] {
-        var request = URLRequest(url: endpoint.appendingPathComponent("models"))
+    func visionModels() async throws -> [LMStudioModelDescriptor] {
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        components?.path = "/api/v1/models"
+        components?.query = nil
+        components?.fragment = nil
+        guard let modelsURL = components?.url else { throw LMStudioError.invalidEndpoint }
+        var request = URLRequest(url: modelsURL)
         request.timeoutInterval = 3
         let (data, response) = try await session.data(for: request, delegate: RejectRedirects())
         try validate(response: response, data: data)
-        return try JSONDecoder().decode(ModelsResponse.self, from: data).data.map(\.id)
+        return try JSONDecoder().decode(ModelsResponse.self, from: data).models
+            .filter { $0.type == "llm" && $0.capabilities?.vision == true }
     }
 
     func ensureReady(modelIdentifier: String) async throws {
-        if (try? await loadedModels()).map({ !$0.isEmpty }) != true {
-            _ = try await runLMS(["server", "start"])
-        }
-
-        if !(try await waitForServer()).contains(modelIdentifier) {
-            _ = try await runLMS([
-                "load", modelIdentifier,
-                "-y",
-                "--identifier", modelIdentifier,
-                "--parallel", "1",
-                "--context-length", String(Self.inferenceContextLength)
-            ])
-            _ = try await waitForServer(expectedModel: modelIdentifier)
+        let models = try await visionModels()
+        guard models.contains(where: { $0.loadedInstances.contains(where: { $0.id == modelIdentifier }) }) else {
+            throw LMStudioError.modelNotLoaded(modelIdentifier)
         }
     }
 
@@ -204,46 +208,6 @@ actor LMStudioClient {
         ]
     }
 
-    private func waitForServer(expectedModel: String? = nil) async throws -> [String] {
-        for _ in 0..<30 {
-            if let models = try? await loadedModels(), expectedModel == nil || models.contains(expectedModel!) {
-                return models
-            }
-            try await Task.sleep(for: .milliseconds(500))
-        }
-        throw LMStudioError.server("LM Studio 本地服务没有及时就绪")
-    }
-
-    private func runLMS(_ arguments: [String]) async throws -> Data {
-        guard let executableURL = Self.lmsExecutableURL() else {
-            throw LMStudioError.commandUnavailable
-        }
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            let output = Pipe()
-            let errors = Pipe()
-            process.executableURL = executableURL
-            process.arguments = arguments
-            process.standardOutput = output
-            process.standardError = errors
-            process.terminationHandler = { process in
-                let outputData = output.fileHandleForReading.readDataToEndOfFile()
-                let errorData = errors.fileHandleForReading.readDataToEndOfFile()
-                if process.terminationStatus == 0 {
-                    continuation.resume(returning: outputData)
-                } else {
-                    let message = String(data: errorData, encoding: .utf8) ?? "LM Studio CLI 执行失败"
-                    continuation.resume(throwing: LMStudioError.commandFailed(message))
-                }
-            }
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-    }
-
     private func validate(
         response: URLResponse,
         data: Data
@@ -268,19 +232,4 @@ actor LMStudioClient {
         return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
     }
 
-    private static func lmsExecutableURL() -> URL? {
-        let fileManager = FileManager.default
-        let homeCandidate = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent(".lmstudio/bin/lms")
-        if fileManager.isExecutableFile(atPath: homeCandidate.path) {
-            return homeCandidate
-        }
-        for directory in ProcessInfo.processInfo.environment["PATH"]?.split(separator: ":") ?? [] {
-            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent("lms")
-            if fileManager.isExecutableFile(atPath: candidate.path) {
-                return candidate
-            }
-        }
-        return nil
-    }
 }

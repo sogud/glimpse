@@ -17,7 +17,7 @@ struct NativeTaskStateChecks {
         precondition(PhotoClassificationTaskState.interrupted.afterManualInspection == .closed
                      && !PhotoClassificationTaskState.closed.canStartOrContinueInference,
                      "检查未知操作后只能关闭，不能重复新建相册或误将撤销恢复成写入")
-        let targets = PhotoClassificationPlanner.defaultTargets(schemes: [.ordinaryDefault, .screenshotDefault])
+        let targets = PhotoClassificationPlanner.defaultTargets(schemes: [.ordinaryDefault, .screenshotDefault], existingAlbums: [])
         precondition(targets["ordinary:work-study"] == .newAlbum(name: "普通照片·工作学习")
                      && targets["screenshot:work-study"] == .newAlbum(name: "截图·工作学习"),
                      "普通照片和截图同名类别必须有独立相册目标")

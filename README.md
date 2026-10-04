@@ -5,7 +5,7 @@
 | 入口 | 当前用途 | 照片访问 | 构建要求 |
 | --- | --- | --- | --- |
 | macOS CLI glimpse | 全图库分批分类、输出计划、确认后加入相册 | Photos Automation，临时导出 | Swift 6 + Command Line Tools，macOS 14+ |
-| macOS App GlimpseMac | 来源选择、分类方案、网格复核、相册映射和撤销 | PhotoKit | 完整且兼容系统的 Xcode，macOS 15+ |
+| macOS App GlimpseMac | 全图库分批、模型状态、分类方案、网格复核、相册映射和撤销 | PhotoKit | 完整且兼容系统的 Xcode，macOS 15+ |
 | iOS App PhotoSort | 滑动清理、相册整理和本地智能分组 | PhotoKit | 完整 Xcode，iOS 18.2+ |
 
 本次内部发布范围是 standalone CLI；[下载与安装](docs/cli-install.md)不需要 Xcode。原生应用继续开发。发布验收契约见 [功能说明](docs/functionality.md)；原生设计见 [macOS Spec](docs/macos-local-photo-classification-spec.md)。开发周期遵循 [AGENTS.md](AGENTS.md)：先资料、再失败测试、最小实现、最终核对。当前格式不做向后兼容或迁移。

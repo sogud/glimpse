@@ -32,12 +32,12 @@ final class LocalPhotoClassificationTests: XCTestCase {
         XCTAssertEqual(ordinary.kind, .ordinary)
         XCTAssertEqual(
             ordinary.categories.map(\.name),
-            ["人物与自拍", "宠物", "美食", "旅行与地标", "自然风景", "工作学习", "商品物品", "其他"]
+            ["人物与自拍", "宠物", "美食", "旅行与地标", "自然风景", "工作学习", "商品物品", "其他", "待删除"]
         )
         XCTAssertEqual(screenshots.kind, .screenshot)
         XCTAssertEqual(
             screenshots.categories.map(\.name),
-            ["聊天社交", "文章知识", "工作学习", "订单票据", "购物商品", "地图行程", "娱乐梗图", "软件系统", "其他"]
+            ["聊天社交", "文章知识", "工作学习", "订单票据", "购物商品", "地图行程", "娱乐梗图", "软件系统", "其他", "待删除"]
         )
         XCTAssertTrue(Set(ordinary.categories.map(\.id)).isDisjoint(with: screenshots.categories.map(\.id)))
     }
@@ -56,29 +56,6 @@ final class LocalPhotoClassificationTests: XCTestCase {
         XCTAssertEqual(scheme.version, 2)
         scheme.removeCategory(id: category.id)
         XCTAssertEqual(scheme.version, 3)
-    }
-
-    func testLegacySchemeIdentifiersAreNamespacedOnce() {
-        var scheme = PhotoClassificationScheme(
-            id: UUID(),
-            name: "旧截图分类",
-            kind: .screenshot,
-            version: 4,
-            categories: [
-                PhotoClassificationCategory(
-                    id: "other",
-                    name: "其他",
-                    classificationDescription: "",
-                    isEnabled: true
-                )
-            ]
-        )
-
-        XCTAssertTrue(scheme.namespaceLegacyCategoryIdentifiers())
-        XCTAssertEqual(scheme.categories[0].id.rawValue, "screenshot:other")
-        XCTAssertEqual(scheme.version, 5)
-        XCTAssertFalse(scheme.namespaceLegacyCategoryIdentifiers())
-        XCTAssertEqual(scheme.version, 5)
     }
 
     func testContinuationSchedulesOnlyUnfinishedOrStaleAssets() {
@@ -113,8 +90,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
             PhotoClassificationResult(
                 fingerprint: current[0],
                 categoryIdentifier: "pets",
-                reason: "猫",
-                reviewedCategoryIdentifier: nil
+                reason: "猫"
             ),
             PhotoClassificationResult(
                 fingerprint: PhotoClassificationFingerprint(
@@ -126,8 +102,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
                     schemeVersion: 1
                 ),
                 categoryIdentifier: "pets",
-                reason: "猫",
-                reviewedCategoryIdentifier: nil
+                reason: "猫"
             )
         ]
 
@@ -152,7 +127,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
             fingerprint: current,
             categoryIdentifier: PhotoClassificationScheme.ordinaryDefault.categories[1].id,
             reason: "猫",
-            reviewedCategoryIdentifier: PhotoClassificationScheme.ordinaryDefault.categories[2].id
+            review: .manual(PhotoClassificationScheme.ordinaryDefault.categories[2].id)
         )
         let otherScheme = PhotoClassificationResult(
             fingerprint: PhotoClassificationFingerprint(
@@ -164,8 +139,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
                 schemeVersion: 1
             ),
             categoryIdentifier: PhotoClassificationScheme.screenshotDefault.categories[0].id,
-            reason: "聊天",
-            reviewedCategoryIdentifier: nil
+            reason: "聊天"
         )
 
         let reused = PhotoClassificationPlanner.reusableResults(
@@ -175,7 +149,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
 
         XCTAssertEqual(reused.count, 1)
         XCTAssertEqual(reused[0].categoryIdentifier, matching.categoryIdentifier)
-        XCTAssertNil(reused[0].reviewedCategoryIdentifier)
+        XCTAssertEqual(reused[0].review, .modelSuggestion)
     }
 
     func testAppliedTaskCannotStartInferenceAgain() {
@@ -221,7 +195,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
                 fingerprint: fingerprint,
                 categoryIdentifier: "pets",
                 reason: "猫",
-                reviewedCategoryIdentifier: "food"
+                review: .manual("food")
             ),
             PhotoClassificationResult(
                 fingerprint: PhotoClassificationFingerprint(
@@ -233,8 +207,7 @@ final class LocalPhotoClassificationTests: XCTestCase {
                     schemeVersion: 1
                 ),
                 categoryIdentifier: "pets",
-                reason: "狗",
-                reviewedCategoryIdentifier: nil
+                reason: "狗"
             )
         ]
 
@@ -285,23 +258,38 @@ final class LocalPhotoClassificationTests: XCTestCase {
         XCTAssertEqual(try store.tasks(), [task])
     }
 
-    func testControlInboxConsumesEachCommandOnce() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    @MainActor
+    func testNativeStoreReopensCurrentTasksAndLeavesOldFilesUntouched() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                               attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: directory) }
-        let inbox = GlimpseControlInbox(directory: directory)
-        let command = GlimpseControlCommand(
-            id: UUID(uuidString: "4B756619-C0E5-470F-A32A-64AF0B6170E1")!,
-            action: .continueTask,
-            taskID: UUID(uuidString: "AF81BF8B-49D2-49F2-8EAF-66D2374A5BA4"),
-            recentDays: nil,
-            modelIdentifier: nil,
-            createdAt: Date(timeIntervalSince1970: 100)
+        let oldFile = directory.appendingPathComponent("old-progress.json")
+        let oldData = Data("synthetic old data, not a supported format".utf8)
+        try oldData.write(to: oldFile)
+        let container = try PhotoClassificationTaskStore.nativeContainer(directory: directory)
+        let store = PhotoClassificationTaskStore(container: container)
+        XCTAssertEqual(try store.tasks(), [])
+        let task = PhotoClassificationTask(
+            id: UUID(), title: "全图库下一批", source: .allPhotos, state: .paused,
+            modelIdentifier: "fixture-vision", ordinaryScheme: .ordinaryDefault, screenshotScheme: .screenshotDefault,
+            assetFingerprints: [], results: [], targetsByCategory: [:], approvedAssetIdentifiers: [], mutations: [],
+            createdAt: Date(timeIntervalSince1970: 100), updatedAt: Date(timeIntervalSince1970: 200)
         )
-
-        try inbox.submit(command)
-
-        XCTAssertEqual(try inbox.consume(), [command])
-        XCTAssertEqual(try inbox.consume(), [])
+        try store.save(task)
+        let reopened = try PhotoClassificationTaskStore.nativeContainer(directory: directory)
+        XCTAssertEqual(try PhotoClassificationTaskStore(container: reopened).task(id: task.id), task)
+        XCTAssertEqual(try Data(contentsOf: oldFile), oldData)
     }
+
+    @MainActor
+    func testNativeStoreRefusesAnExistingFileAsItsDirectory() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let data = Data("preserve this synthetic file".utf8)
+        try data.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertThrowsError(try PhotoClassificationTaskStore.nativeContainer(directory: file))
+        XCTAssertEqual(try Data(contentsOf: file), data)
+    }
+
 }

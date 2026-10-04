@@ -3,16 +3,9 @@ import Foundation
 import Photos
 import Vision
 
-struct PhotoAlbumDescriptor: Hashable, Identifiable {
-    let id: String
-    let name: String
-    let assetCount: Int
-}
-
 enum MacPhotoLibraryError: LocalizedError {
     case insufficientPermission
     case albumNotFound
-    case ambiguousAlbumName(String)
     case imageUnavailable
     case partialApply(records: [PhotoAlbumMutationRecord], message: String)
 
@@ -22,8 +15,6 @@ enum MacPhotoLibraryError: LocalizedError {
             return "需要 Apple Photos 读写权限"
         case .albumNotFound:
             return "找不到选择的相册"
-        case .ambiguousAlbumName(let name):
-            return "存在多个同名相册：\(name)，请先在 Photos 中整理名称。"
         case .imageUnavailable:
             return "无法从 Photos 读取这张图片"
         case .partialApply(_, let message):
@@ -68,6 +59,9 @@ final class MacPhotoLibraryService {
 
         let fetchResult: PHFetchResult<PHAsset>
         switch source {
+        case .allPhotos:
+            options.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+            fetchResult = PHAsset.fetchAssets(with: options)
         case .album(let identifier, _):
             let collections = PHAssetCollection.fetchAssetCollections(
                 withLocalIdentifiers: [identifier],

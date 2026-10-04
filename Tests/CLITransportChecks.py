@@ -21,7 +21,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def respond(self):
         requests.append((self.command, self.path))
-        if self.path.startswith("/redirect/"):
+        if self.path == "/api/v1/models":
+            self.send_response(200)
+            body = json.dumps({"models": [
+                {"type": "llm", "key": "fixture-vision", "display_name": "Fixture Vision",
+                 "capabilities": {"vision": True}, "loaded_instances": [{"id": "test"}]},
+                {"type": "llm", "key": "unloaded-vision", "display_name": "Unloaded Vision",
+                 "capabilities": {"vision": True}, "loaded_instances": []},
+                {"type": "llm", "key": "text-only", "display_name": "Text Model",
+                 "capabilities": {"vision": False}, "loaded_instances": [{"id": "text"}]},
+                {"type": "embedding", "key": "embedding", "display_name": "Embedding", "loaded_instances": []},
+            ]}).encode()
+        elif self.path.startswith("/redirect/"):
             self.send_response(307)
             self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/destination")
             body = b"redirect blocked"
@@ -76,6 +87,9 @@ try:
         ("GET", "/success/models"),
         ("POST", "/success/chat/completions"),
         ("POST", "/native-error/chat/completions"),
+        ("GET", "/api/v1/models"),
+        ("GET", "/api/v1/models"),
+        ("GET", "/api/v1/models"),
     ], f"Unexpected requests (redirect or retry): {requests}"
     print("Transport checks passed: no redirects, one inference attempt per image, original server errors preserved")
 finally:
