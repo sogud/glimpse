@@ -5,7 +5,7 @@
 | 入口 | 当前用途 | 照片访问 | 构建要求 |
 | --- | --- | --- | --- |
 | macOS CLI glimpse | 全图库分批分类、输出计划、确认后加入相册 | Photos Automation，临时导出 | Swift 6 + Command Line Tools，macOS 14+ |
-| macOS App GlimpseMac | 全图库分批、模型状态、分类方案、网格复核、相册映射和撤销 | PhotoKit | 完整且兼容系统的 Xcode，macOS 15+ |
+| macOS App GlimpseMac | 纯 AppKit 界面：全图库分批、模型状态、分类方案、网格复核、相册映射和撤销 | PhotoKit | 完整且兼容系统的 Xcode，macOS 15+ |
 | iOS App PhotoSort | 滑动清理、相册整理和本地智能分组 | PhotoKit | 完整 Xcode，iOS 18.2+ |
 
 CLI 与原生 App 分别交付内部预览包，下载后运行都不需要 Xcode；从源码构建原生 App 仍需要完整 Xcode。安装步骤见 [CLI 安装说明](docs/cli-install.md) 和 [原生 App 安装说明](docs/native-install.md)。发布验收契约见 [功能说明](docs/functionality.md)；原生设计见 [macOS Spec](docs/macos-local-photo-classification-spec.md)。开发周期遵循 [AGENTS.md](AGENTS.md)：先资料、再失败测试、最小实现、最终核对。当前格式不做向后兼容或迁移。
@@ -58,6 +58,7 @@ photos status [--json] 只读本机批处理记录，不访问 Photos、不连�
 ## 开发与验证
 
     rtk proxy bash scripts/check.sh
+    rtk proxy bash scripts/check-appkit.sh
     rtk swift build -c release --product glimpse
 
-检查使用合成计划、临时文件和临时本机 HTTP 服务，不访问个人 Photos 或 LM Studio。原生应用在 PhotoSort.xcodeproj 内选择 PhotoSort 或 GlimpseMac scheme；CLI 检查不能证明原生 UI 和 PhotoKit 流程正常。
+检查使用合成计划、临时文件和临时本机 HTTP 服务，不访问个人 Photos 或 LM Studio。check-appkit.sh 操作原生控件，验证新建任务、复核、缩略图刷新和取消写入；加 --preview 可查看合成照片网格。原生应用在 PhotoSort.xcodeproj 内选择 PhotoSort 或 GlimpseMac scheme；这些组件检查不等于完整 App 和真实 PhotoKit 流程验收。

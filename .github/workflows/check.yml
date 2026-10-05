@@ -17,20 +17,22 @@ jobs:
         run: bash scripts/check.sh
       - name: Native packaging fixture checks
         run: python3 Tests/NativePackagingChecks.py
+      - name: AppKit controls with synthetic tasks
+        run: bash scripts/check-appkit.sh
       - name: Native macOS Release compile
         run: xcodebuild -project PhotoSort.xcodeproj -scheme GlimpseMac -configuration Release -destination 'platform=macOS' -derivedDataPath .build/native-app ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build
       - name: Native classification planning tests
         run: swift test --filter LocalPhotoClassificationTests
       - name: Package native preview
         run: |
-          bash scripts/package-native.sh v0.3.0 .build/native-app/Build/Products/Release/GlimpseMac.app .build/native-release
+          bash scripts/package-native.sh v0.4.0 .build/native-app/Build/Products/Release/GlimpseMac.app .build/native-release
           python3 Tests/NativeReleaseChecks.py .build/native-release
       - name: Upload verified native preview
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: GlimpseMac-macos-arm64
           path: |
-            .build/native-release/GlimpseMac-v0.3.0-macos-arm64.zip
+            .build/native-release/GlimpseMac-v0.4.0-macos-arm64.zip
             .build/native-release/SHA256SUMS
           if-no-files-found: error
           retention-days: 7

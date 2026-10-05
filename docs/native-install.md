@@ -1,6 +1,6 @@
 # GlimpseMac internal preview
 
-This package contains a native SwiftUI / AppKit application. PhotoKit reads Apple Photos; image inference uses only a local LM Studio server. It is a development preview, not a completed real-library production acceptance.
+This package contains a native AppKit application without SwiftUI or a Web interface. PhotoKit reads Apple Photos; image inference uses only a local LM Studio server. It is a development preview, not a completed real-library production acceptance.
 
 Requirements: Apple Silicon, macOS 15+, and LM Studio 0.4+ with a loaded vision model and its local server running. The downloaded App does not require Xcode. The App is ad-hoc signed and not notarized; macOS may require you to approve opening it through the standard security UI. Do not disable system protections.
 
@@ -19,4 +19,4 @@ Native task data lives in the system Application Support directory under Glimpse
 
 PhotoKit obtains a resized image in memory and may download an iCloud original through the system. Photos and OCR are not uploaded to cloud inference or telemetry. Task records contain private photo identifiers and reasons; do not share the data directory.
 
-Automated checks cover batch selection, task progress, review and confirmation logic, HTTP model metadata, native compilation and isolated storage. They do not prove current-model accuracy, real Photos permissions/iCloud behavior, full-library performance or native UI interaction.
+Automated checks cover batch selection, task progress, HTTP model metadata, native compilation, isolated storage and AppKit control interactions with synthetic tasks, including cancelling album writes. They do not prove current-model accuracy, real Photos permissions/iCloud behavior, full-library performance or complete application integration.

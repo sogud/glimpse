@@ -18,7 +18,7 @@ When commit, push, and release are requested, complete verification first and sh
 ## Surfaces and ownership
 
 - CLI/ and Sources/PhotosCLIKit/: standalone macOS CLI, Photos Automation, LM Studio, JSON plans and batch progress. No dependency on the native App or SwiftData.
-- MacApp/: native macOS PhotoKit task/review UI, LM Studio, album writes and undo.
+- MacApp/: pure AppKit macOS task/review UI, PhotoKit, LM Studio, album writes and undo. No SwiftUI or NSHostingView compatibility layer.
 - Sources/SmartCore/: native classification planning, task storage and local smart analysis.
 - Sources/App/, Sources/View/, Sources/ViewModel/, Sources/Service/: iOS swipe-cleanup application.
 - Tests/: Swift package tests, CLI checks and isolated HTTP fixtures.
@@ -47,6 +47,12 @@ For CLI changes:
 For HTTP changes (synthetic images and localhost server only):
 
     rtk proxy python3 Tests/CLITransportChecks.py
+
+For AppKit controls (synthetic task data, no PhotoKit or model calls):
+
+    rtk proxy bash scripts/check-appkit.sh
+
+Use --preview on that script to inspect the synthetic review grid. This is a component check, not real-library or full-application acceptance.
 
 CLI builds need compatible Swift 6 Command Line Tools. Native builds need a full compatible Xcode. SmartCore uses SwiftData macros, so full swift test may not work in a Command-Line-Tools-only environment; don't confuse this with passing native tests. Run only checks related to the change and state what remains unverified. Prose changes need link/diff checks, not an app build.
 
