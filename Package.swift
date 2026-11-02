@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "PhotoSortSessionCore", targets: ["PhotoSortSessionCore"]),
         .library(name: "PhotoSortSmartCore", targets: ["PhotoSortSmartCore"]),
         .library(name: "GlimpsePhotosCLIKit", targets: ["GlimpsePhotosCLIKit"]),
+        .executable(name: "photosift", targets: ["GlimpseCLI"]),
         .executable(name: "glimpse", targets: ["GlimpseCLI"])
     ],
     targets: [

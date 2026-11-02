@@ -10,13 +10,18 @@ enum CLIError: LocalizedError {
         }
     }
 
+    static let commandName = URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent == "glimpse"
+        ? "glimpse" : "photosift"
+
     static let help = """
+    PhotoSift（拾图）— 本地照片分类整理
+
     用法：
-      glimpse photos classify-selection [--limit 10] [--model <model-id>] [--endpoint <url>] [--output <file>] [--json]
-      glimpse photos classify-next [--limit 10] [--model <model-id>] [--endpoint <url>] [--output <file>] [--json]
-      glimpse photos apply <plan.json>
-      glimpse photos status [--json]
-      glimpse photos retry <failed|skipped> [--json]
+      \(CLIError.commandName) photos classify-selection [--limit 10] [--model <model-id>] [--endpoint <url>] [--output <file>] [--json]
+      \(CLIError.commandName) photos classify-next [--limit 10] [--model <model-id>] [--endpoint <url>] [--output <file>] [--json]
+      \(CLIError.commandName) photos apply <plan.json>
+      \(CLIError.commandName) photos status [--json]
+      \(CLIError.commandName) photos retry <failed|skipped> [--json]
 
     使用步骤：
       1. 运行 classify-next，从上次进度继续检查最多 10 个图库项目并分析其中的静态照片。
@@ -123,7 +128,7 @@ struct GlimpseCLI {
                     print("{\"completed\":true,\"processed\":0}")
                 } else {
                     print("本次扫描没有发现新的待处理项目；这不代表全部分类或写入成功。")
-                    print("运行 glimpse photos status 查看失败、跳过及写入回执。")
+                    print("运行 \(CLIError.commandName) photos status 查看失败、跳过及写入回执。")
                 }
                 return
             case .skipped(let identifiers):
@@ -171,7 +176,7 @@ struct GlimpseCLI {
         }
         print("\n分类计划已保存：\(outputURL.path)")
         print("当前没有修改照片图库。确认后运行：")
-        print("glimpse photos apply \"\(outputURL.path)\"")
+        print("\(CLIError.commandName) photos apply \"\(outputURL.path)\"")
     }
 
     private static func status(json: Bool) throws {

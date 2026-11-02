@@ -1,10 +1,19 @@
-# Glimpse / PhotoSort
+# Glimpse / PhotoSift
+
+## 产品定位（2026-11-01）
+
+- **Glimpse**：iOS 相册 App，滑动清理、相册整理与本地智能分组。
+- **PhotoSift（拾图）**：macOS 本地照片分类整理工具，CLI 命令为 `photosift`，原生界面沿用现有 GlimpseMac 构建目标。
+
+两个产品暂在同一仓库，不复制底层代码；CLI 与原生界面不共享任务记录。PhotoSift 只做“分析照片 → 检查计划 → 确认加入相册”，不引入插件或工作流框架。
+
+`photosift` 与现有 `glimpse` 命令使用同一实现及运行目录；既有命令、进度、锁和相册名称保持不变，不迁移个人数据。当前命名是本地开发名称，未核查商标或域名。
 
 本地照片整理项目，目前有三个独立入口。它们的任务记录不共享，不要把 CLI 进度当作原生 App 进度。
 
 | 入口 | 当前用途 | 照片访问 | 构建要求 |
 | --- | --- | --- | --- |
-| macOS CLI glimpse | 全图库分批分类、输出计划、确认后加入相册 | Photos Automation，临时导出 | Swift 6 + Command Line Tools，macOS 14+ |
+| macOS CLI PhotoSift（photosift） | 全图库分批分类、输出计划、确认后加入相册 | Photos Automation，临时导出 | Swift 6 + Command Line Tools，macOS 14+ |
 | macOS App GlimpseMac | 纯 AppKit 界面：全图库分批、模型状态、分类方案、网格复核、相册映射和撤销 | PhotoKit | 完整且兼容系统的 Xcode，macOS 15+ |
 | iOS App PhotoSort | 滑动清理、相册整理和本地智能分组 | PhotoKit | 完整 Xcode，iOS 18.2+ |
 
@@ -14,19 +23,19 @@ CLI 与原生 App 分别交付内部预览包，下载后运行都不需要 Xcod
 
 先在 LM Studio 中启动本地服务并加载视觉模型，例如已安装的 Qwen3-VL。CLI 不安装模型、不自动启动服务。
 
-    rtk swift run glimpse photos status --json
-    rtk swift run glimpse photos classify-next --limit 10
+    rtk swift run photosift photos status --json
+    rtk swift run photosift photos classify-next --limit 10
 
 classify-next 从已保存的稳定 Photos ID 继续扫描，单批最多检查 10 个图库项目；视频或无法导出的项目也占名额。同一用户同时只允许一个写进程，即使运行目录不同。classify-selection 处理手选照片，同样记录结果。失败或跳过项目可显式重新排队：
 
-    rtk swift run glimpse photos retry failed
-    rtk swift run glimpse photos retry skipped
+    rtk swift run photosift photos retry failed
+    rtk swift run photosift photos retry skipped
 
 默认数据在 ~/Library/Application Support/Glimpse/CLI。GLIMPSE_HOME 可指定隔离目录；不读取或迁移旧版个人进度文件。
 
 默认端点是 http://127.0.0.1:1234/v1，只允许本机回环地址，拒绝 HTTP 重定向。未指定 --model 时按模型名称优先选择 Qwen3-VL/vision/vl；这不是视觉能力检测，多个模型或特殊名称建议显式指定：
 
-    rtk swift run glimpse photos classify-next --limit 10 --model qwen/qwen3-vl-4b --json
+    rtk swift run photosift photos classify-next --limit 10 --model qwen/qwen3-vl-4b --json
 
 每张图片只发送一次分类请求，同一次响应决定普通照片/截图及具体分类。不自动降级重发；模型必须能接受图片和结构化输出。服务返回的实际错误会保留，不能仅凭 HTTP 400 判断是视觉模块或结构化输出不兼容。
 
@@ -36,7 +45,7 @@ classify-next 从已保存的稳定 Photos ID 继续扫描，单批最多检查 
 
 检查输出或 JSON 计划后，再显式应用：
 
-    rtk swift run glimpse photos apply "<plan.json>"
+    rtk swift run photosift photos apply "<plan.json>"
 
 命令会验证计划里的分类 ID、名称、方案和照片 ID，再显示相册清单，输入 yes 后才写入。首次访问需要允许终端控制「照片」。只向 Glimpse 文件夹下的“普通照片·分类”“截图·分类”或统一的“待删除”相册添加照片；原照片不移动、不删除。“待删除”只是一条需要人工复核的建议。
 
@@ -59,6 +68,6 @@ photos status [--json] 只读本机批处理记录，不访问 Photos、不连�
 
     rtk proxy bash scripts/check.sh
     rtk proxy bash scripts/check-appkit.sh
-    rtk swift build -c release --product glimpse
+    rtk swift build -c release --product photosift
 
 检查使用合成计划、临时文件和临时本机 HTTP 服务，不访问个人 Photos 或 LM Studio。check-appkit.sh 操作原生控件，验证新建任务、复核、缩略图刷新和取消写入；加 --preview 可查看合成照片网格。原生应用在 PhotoSort.xcodeproj 内选择 PhotoSort 或 GlimpseMac scheme；这些组件检查不等于完整 App 和真实 PhotoKit 流程验收。

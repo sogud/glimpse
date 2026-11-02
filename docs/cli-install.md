@@ -1,4 +1,8 @@
-# Glimpse CLI internal development release
+# PhotoSift CLI
+
+Build the new command from this checkout with `swift build -c release --product photosift`, then run `.build/release/photosift photos --help`. PhotoSift and the retained `glimpse` command use the same code and runtime directory; no personal data is migrated. Existing release scripts and archives still use `glimpse`; no PhotoSift release has been published.
+
+## Existing Glimpse CLI internal development release
 
 The release contains a macOS arm64 CLI for local Apple Photos classification with LM Studio. It does not contain a native App. The binary is ad-hoc signed; it is not notarized for App Store distribution.
 
