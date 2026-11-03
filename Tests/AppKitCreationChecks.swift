@@ -36,8 +36,9 @@ enum AppKitCreationChecks {
         assert(primary?.title == "开始分类 10 张", "The primary action must say what happens next and include the batch size")
         let create = primary!
         let actionRect = controller.view.convert(create.bounds, from: create)
-        assert(abs(controller.view.bounds.maxX - actionRect.maxX - 28) < 1,
-               "The primary action must align with the right edge of the workspace")
+        let alignmentRect = controller.view.convert(create.alignmentRect(forFrame: create.frame), from: create.superview)
+        assert(abs(controller.view.bounds.maxX - alignmentRect.maxX - 28) < 1,
+               "The primary action's alignment rectangle must respect the 28-point trailing margin")
         assert(actionRect.minY >= 0 && actionRect.minY <= 40, "The primary action must stay near the bottom, not float in an oversized footer")
         assert(!create.isEnabled, "An unavailable local model must prevent task creation")
         let labels = views.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: "\n")
