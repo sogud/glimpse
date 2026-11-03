@@ -19,6 +19,30 @@
 
 CLI 与原生 App 分别交付内部预览包，下载后运行都不需要 Xcode；从源码构建原生 App 仍需要完整 Xcode。安装步骤见 [CLI 安装说明](docs/cli-install.md) 和 [原生 App 安装说明](docs/native-install.md)。发布验收契约见 [功能说明](docs/functionality.md)；原生设计见 [macOS Spec](docs/macos-local-photo-classification-spec.md)。开发周期遵循 [AGENTS.md](AGENTS.md)：先资料、再失败测试、最小实现、最终核对。当前格式不做向后兼容或迁移。
 
+## 原生 App 一行安装
+
+GlimpseMac 适用于 Apple Silicon Mac（macOS 15+）。在「终端」里运行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sogud/glimpse/master/install.sh | sh
+```
+
+脚本会下载最新版本（包括预览版），校验 SHA-256，把 `GlimpseMac.app` 装到「应用程序」（没有写入权限时装到 `~/Applications`）。用这种方式安装不会弹出 Gatekeeper 拦截。指定版本：`curl -fsSL … | VERSION=v0.4.0 sh`；卸载：`curl -fsSL … | sh -s -- --uninstall`（不删任务记录和设置）。安装前可以先看看[脚本内容](install.sh)。CLI 仍按 [CLI 安装说明](docs/cli-install.md) 手动安装。
+
+<details>
+<summary>手动安装 / 提示「无法验证开发者」</summary>
+
+GlimpseMac 只做了本地临时签名，没有经过 Apple 公证，所以用浏览器下载后第一次打开会被拦截。
+
+1. 在 [Releases](https://github.com/sogud/glimpse/releases) 下载 `GlimpseMac-<版本>-macos-arm64.zip`，解压后把 `GlimpseMac.app` 拖进「应用程序」。
+2. 方法一：在终端运行
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/GlimpseMac.app
+   ```
+3. 方法二：先双击打开一次，然后进入 **系统设置 → 隐私与安全性**，在下方找到「已阻止打开 GlimpseMac」，点 **仍要打开**，再输入密码确认。
+
+</details>
+
 ## CLI 使用
 
 先在 LM Studio 中启动本地服务并加载视觉模型，例如已安装的 Qwen3-VL。CLI 不安装模型、不自动启动服务。
