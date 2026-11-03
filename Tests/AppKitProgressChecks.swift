@@ -48,7 +48,9 @@ enum AppKitProgressChecks {
         button.performClick(nil)
         assert(resumes == 1 && pauses == 1)
         let rect = controller.view.convert(button.bounds, from: button)
-        assert(rect.minY >= 0 && rect.minY <= 40 && abs(rect.maxX - controller.view.bounds.maxX + 28) < 1)
+        let alignmentRect = controller.view.convert(button.alignmentRect(forFrame: button.frame), from: button.superview)
+        assert(rect.minY >= 0 && rect.minY <= 40 && abs(alignmentRect.maxX - controller.view.bounds.maxX + 28) < 1,
+               "The button must remain visible and its alignment rectangle must respect the 28-point trailing margin")
         window.close()
         print("AppKit progress checks passed: counts, pause, waiting and same-batch resume; no Photos/model access")
     }
