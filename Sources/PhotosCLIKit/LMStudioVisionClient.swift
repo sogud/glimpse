@@ -54,12 +54,16 @@ public actor LMStudioVisionClient {
         self.session = session
     }
 
-    public func resolveModel(requested: String?) async throws -> String {
+    public func modelIdentifiers() async throws -> [String] {
         var request = URLRequest(url: endpoint.appendingPathComponent("models"))
         request.timeoutInterval = 5
         let (data, response) = try await session.data(for: request, delegate: RejectRedirects())
         try validate(response, data: data)
-        let models = try JSONDecoder().decode(ModelsResponse.self, from: data).data.map(\.id)
+        return try JSONDecoder().decode(ModelsResponse.self, from: data).data.map(\.id)
+    }
+
+    public func resolveModel(requested: String?) async throws -> String {
+        let models = try await modelIdentifiers()
         if let requested {
             guard models.contains(requested) else {
                 throw GlimpsePhotosCLIError.modelOutput("指定模型尚未加载：\(requested)")

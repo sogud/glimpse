@@ -4,7 +4,7 @@ public struct PhotoLibraryCLIOptions: Equatable, Sendable {
     public enum Command: String, Sendable {
         case classifySelection = "classify-selection"
         case classifyNext = "classify-next"
-        case apply, status, retry, help
+        case apply, status, models, retry, help
     }
 
     public let command: Command
@@ -51,8 +51,12 @@ public struct PhotoLibraryCLIOptions: Equatable, Sendable {
             return result
         }
 
-        let allowed: Set<String> = command == .status
-            ? ["--json"] : ["--limit", "--endpoint", "--model", "--output", "--json"]
+        let allowed: Set<String>
+        switch command {
+        case .status: allowed = ["--json"]
+        case .models: allowed = ["--endpoint", "--json"]
+        default: allowed = ["--limit", "--endpoint", "--model", "--output", "--json"]
+        }
         var seen: Set<String> = []
         var index = 0
         while index < tail.count {

@@ -21,6 +21,7 @@ enum CLIError: LocalizedError {
       \(CLIError.commandName) photos classify-next [--limit 10] [--model <model-id>] [--endpoint <url>] [--output <file>] [--json]
       \(CLIError.commandName) photos apply <plan.json>
       \(CLIError.commandName) photos status [--json]
+      \(CLIError.commandName) photos models [--endpoint <url>] [--json]
       \(CLIError.commandName) photos retry <failed|skipped> [--json]
 
     使用步骤：
@@ -54,6 +55,8 @@ struct GlimpseCLI {
             try apply(options.plan!)
         case .status:
             try status(json: options.json)
+        case .models:
+            try await models(options)
         case .retry:
             let workspace = PhotoLibraryWorkspace.current
             let lease = try workspace.acquireLock()
@@ -177,6 +180,27 @@ struct GlimpseCLI {
         print("\n分类计划已保存：\(outputURL.path)")
         print("当前没有修改照片图库。确认后运行：")
         print("\(CLIError.commandName) photos apply \"\(outputURL.path)\"")
+    }
+
+    private static func models(_ options: PhotoLibraryCLIOptions) async throws {
+        let client = try LMStudioVisionClient(endpoint: options.endpoint)
+        let identifiers = try await client.modelIdentifiers()
+        if options.json {
+            let response: [String: Any] = [
+                "endpoint": options.endpoint.absoluteString,
+                "models": identifiers
+            ]
+            let data = try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+            return
+        }
+        print("模型服务：\(options.endpoint.absoluteString)")
+        if identifiers.isEmpty {
+            print("服务未返回模型，请在 LM Studio 中检查模型状态。")
+        } else {
+            print("服务报告的模型（尚未验证视觉能力或加载状态）：")
+            for identifier in identifiers { print(identifier) }
+        }
     }
 
     private static func status(json: Bool) throws {

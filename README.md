@@ -5,7 +5,7 @@
 - **Glimpse**：iOS 相册 App，滑动清理、相册整理与本地智能分组。
 - **PhotoSift（拾图）**：macOS 本地照片分类整理工具，CLI 命令为 `photosift`，原生界面沿用现有 GlimpseMac 构建目标。
 
-两个产品暂在同一仓库，不复制底层代码；CLI 与原生界面不共享任务记录。PhotoSift 只做“分析照片 → 检查计划 → 确认加入相册”，不引入插件或工作流框架。
+两个产品暂在同一仓库，不复制底层代码；CLI 与原生界面不共享任务记录。PhotoSift 只做“分析照片 → 检查计划 → 确认加入相册”，不引入插件或工作流框架。现有 iOS 官网源码见 [website/](website/README.md)。
 
 `photosift` 与现有 `glimpse` 命令使用同一实现及运行目录；既有命令、进度、锁和相册名称保持不变，不迁移个人数据。当前命名是本地开发名称，未核查商标或域名。
 
@@ -45,7 +45,11 @@ GlimpseMac 只做了本地临时签名，没有经过 Apple 公证，所以用�
 
 ## CLI 使用
 
-先在 LM Studio 中启动本地服务并加载视觉模型，例如已安装的 Qwen3-VL。CLI 不安装模型、不自动启动服务。
+先在 LM Studio 中启动本地服务并加载视觉模型，例如已安装的 Qwen3-VL。CLI 不安装模型、不自动启动服务。可先查询服务报告的模型，不访问照片、不创建任务记录：
+
+    rtk swift run photosift photos models --json
+
+`models` 可指定 `--endpoint`，仅支持本机回环地址。结果是服务返回的模型 ID，不代表已经验证视觉能力或实际加载状态；服务不可用时返回错误，不自动启动或下载模型。
 
     rtk swift run photosift photos status --json
     rtk swift run photosift photos classify-next --limit 10
@@ -95,3 +99,7 @@ photos status [--json] 只读本机批处理记录，不访问 Photos、不连�
     rtk swift build -c release --product photosift
 
 检查使用合成计划、临时文件和临时本机 HTTP 服务，不访问个人 Photos 或 LM Studio。check-appkit.sh 操作原生控件，验证新建任务、复核、缩略图刷新和取消写入；加 --preview 可查看合成照片网格。原生应用在 PhotoSort.xcodeproj 内选择 PhotoSort 或 GlimpseMac scheme；这些组件检查不等于完整 App 和真实 PhotoKit 流程验收。
+
+## License
+
+本仓第一方代码采用 [MIT License](LICENSE)。第三方代码与素材保留各自的许可和署名，根许可证不替代其原有条款。

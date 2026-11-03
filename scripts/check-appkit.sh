@@ -4,6 +4,9 @@ cd "$(dirname "$0")/.."
 check_directory="$(mktemp -d -t glimpse-appkit-checks)"
 trap 'rm -r "$check_directory"' EXIT
 swiftc Sources/SmartCore/LocalPhotoClassificationCore.swift Sources/SmartCore/LocalPhotoClassificationTask.swift \
+    MacApp/NativeControls.swift MacApp/PhotoProgressViewController.swift Tests/AppKitProgressChecks.swift -o "$check_directory/progress"
+"$check_directory/progress"
+swiftc Sources/SmartCore/LocalPhotoClassificationCore.swift Sources/SmartCore/LocalPhotoClassificationTask.swift \
     MacApp/NativeControls.swift MacApp/PhotoInspectorWindowController.swift MacApp/PhotoReviewViewController.swift \
     Tests/AppKitReviewChecks.swift -o "$check_directory/review"
 "$check_directory/review" "$@"

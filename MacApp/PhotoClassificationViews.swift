@@ -23,6 +23,7 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
         window.title = "Glimpse"
         window.minSize = NSSize(width: 980, height: 680)
         window.isReleasedWhenClosed = false
+        window.autorecalculatesKeyViewLoop = true
         super.init(window: window)
         window.center()
         buildLayout()
@@ -50,32 +51,42 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
         let split = NSSplitViewController()
         split.splitView.isVertical = true
         split.splitView.dividerStyle = .thin
-        let sidebar = NSView()
-        let new = NativeButton("新建分类任务") { [weak self] in self?.newTask() }
+        window.backgroundColor = NativeUI.canvas
+        let sidebar = NativeSurfaceView()
+        sidebar.fillColor = NativeUI.sidebar
+        let new = NativeButton("开始新的一批") { [weak self] in self?.newTask() }
         new.keyEquivalent = "n"
         new.keyEquivalentModifierMask = .command
-        refreshButton = NativeButton("刷新照片和模型状态") { [weak self] in self?.refreshEnvironment() }
-        deleteButton = NativeButton("删除所选任务") { [weak self] in self?.deleteSelectedTask() }
-        let title = NativeUI.label("分类任务", size: 18, weight: .semibold)
-        let toolbar = NativeUI.stack([title, new, refreshButton])
+        new.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
+        refreshButton = NativeButton("刷新图库与模型") { [weak self] in self?.refreshEnvironment() }
+        refreshButton.bezelStyle = .inline
+        deleteButton = NativeButton("移除这批记录…") { [weak self] in self?.deleteSelectedTask() }
+        deleteButton.bezelStyle = .inline
+        let title = NativeUI.label("Glimpse", size: 22, weight: .semibold, color: NativeUI.ink)
+        let toolbar = NativeUI.stack([title, new,
+                                      NativeUI.label("整理记录", size: 12, weight: .semibold, color: NativeUI.muted)], spacing: 16)
+        let sidebarActions = NativeUI.stack([refreshButton, deleteButton], spacing: 12)
         let column = NSTableColumn(identifier: .init("task"))
         column.resizingMask = .autoresizingMask
         column.width = 240
         table.addTableColumn(column)
         table.headerView = nil
         table.rowHeight = 58
+        table.backgroundColor = NativeUI.sidebar
+        table.setAccessibilityLabel("照片整理记录")
         table.dataSource = self
         table.delegate = self
-        table.selectionHighlightStyle = .sourceList
+        table.style = .plain
+        table.autoresizingMask = [.width]
         table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
         scroll.documentView = table
         sidebar.addSubview(toolbar)
         sidebar.addSubview(scroll)
-        sidebar.addSubview(deleteButton)
+        sidebar.addSubview(sidebarActions)
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        deleteButton.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             toolbar.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 16),
             toolbar.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -16),
@@ -83,9 +94,10 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
             scroll.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 16),
-            scroll.bottomAnchor.constraint(equalTo: deleteButton.topAnchor, constant: -12),
-            deleteButton.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 16),
-            deleteButton.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -16)
+            scroll.bottomAnchor.constraint(equalTo: sidebarActions.topAnchor, constant: -16),
+            sidebarActions.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 16),
+            sidebarActions.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -16),
+            sidebarActions.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -16)
         ])
         let sidebarHost = NSViewController()
         sidebarHost.view = sidebar
@@ -97,7 +109,7 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
         split.addSplitViewItem(sidebarItem)
         split.addSplitViewItem(NSSplitViewItem(viewController: detailHost))
         window.contentViewController = split
-        split.splitView.setPosition(250, ofDividerAt: 0)
+        split.splitView.setPosition(230, ofDividerAt: 0)
     }
 
     private func render() {
@@ -141,18 +153,24 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
     }
 
     private func showPermission(_ status: PHAuthorizationStatus) {
-        let button = NativeButton(status == .notDetermined ? "授权访问" : "打开系统设置") { [weak self] in
+        let button = NativeButton(status == .notDetermined ? "允许访问照片" : "打开系统设置") { [weak self] in
             if status == .notDetermined { Task { await self?.coordinator.requestPhotosPermission() } }
             else { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app")) }
         }
+        NativeUI.primary(button)
         let content = NativeUI.stack([
-            NativeUI.label("需要 Apple Photos 权限", size: 24, weight: .semibold),
-            NativeUI.label("图片只交给本机模型识别。分析不会修改 Photos，复核并确认后才加入相册。iCloud 照片可能需要系统下载。"), button,
-            NativeUI.label("若已拒绝，在“隐私与安全性 → 照片”中允许 Glimpse 访问，再回来刷新。", size: 12, color: .secondaryLabelColor)
-        ], spacing: 20)
-        content.edgeInsets = NSEdgeInsets(top: 32, left: 28, bottom: 28, right: 28)
+            NativeUI.label("先允许访问 Apple Photos", size: 26, weight: .semibold, color: NativeUI.ink),
+            NativeUI.steps(current: 1),
+            NativeUI.label("图片只交给本机模型识别。分析不会改动相册，检查并确认后才加入。", color: NativeUI.muted),
+            NativeUI.label("iCloud 照片可能需要系统下载。若已拒绝访问，请在系统设置的“隐私与安全性 → 照片”中允许 Glimpse，再回来刷新。", size: 12, color: NativeUI.muted)
+        ], spacing: 24)
+        content.edgeInsets = NSEdgeInsets(top: 28, left: 28, bottom: 24, right: 28)
+        for label in content.views.compactMap({ $0 as? NSTextField }) {
+            label.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -56).isActive = true
+        }
         let controller = NSViewController()
-        controller.view = NativeUI.scroll(content)
+        controller.view = NativeUI.workspace(content: content, footer: NativeUI.commandBar(
+            message: NativeUI.label("你决定授权范围。\n分类结果检查后才会写入相册。", size: 12, color: NativeUI.muted), actions: button))
         embed(controller)
     }
 
@@ -170,11 +188,13 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
 
     private func handleNewTask(_ action: NewTaskAction) {
         switch action {
-        case .create(let source, let title, let model, let limit):
+        case .startClassification(let source, let title, let model, let limit):
             Task {
-                _ = await coordinator.createTask(source: source, title: title, modelIdentifier: model,
-                                                 ordinaryScheme: coordinator.savedOrdinaryScheme,
-                                                 screenshotScheme: coordinator.savedScreenshotScheme, limit: limit)
+                if let taskID = await coordinator.createTask(source: source, title: title, modelIdentifier: model,
+                                                             ordinaryScheme: coordinator.savedOrdinaryScheme,
+                                                             screenshotScheme: coordinator.savedScreenshotScheme, limit: limit) {
+                    coordinator.startOrContinue(taskID: taskID)
+                }
             }
         case .endpointChanged(let endpoint):
             coordinator.endpointText = endpoint
@@ -187,31 +207,19 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
     }
 
     private func showProgress(_ task: PhotoClassificationTask) {
-        let progress = task.progress
-        let indicator = NSProgressIndicator()
-        indicator.isIndeterminate = false
-        indicator.minValue = 0
-        indicator.maxValue = Double(max(progress.total, 1))
-        indicator.doubleValue = Double(progress.analyzed)
-        indicator.widthAnchor.constraint(equalToConstant: 500).isActive = true
-        let start = NativeButton(task.state == .draft ? "开始分类" : "继续分类") { [weak self] in
-            self?.coordinator.startOrContinue(taskID: task.id)
-        }
-        start.isEnabled = task.state.canStartOrContinueInference && coordinator.canChangeEnvironment
-        let pause = NativeButton("暂停分类") { [weak self] in self?.coordinator.pause(taskID: task.id) }
-        pause.isEnabled = task.state == .running
         let isPausing = task.state == .paused && coordinator.activeTaskID == task.id
-        let content = NativeUI.stack([
-            NativeUI.label(task.title, size: 24, weight: .semibold),
-            NativeUI.label(isPausing ? "正在暂停，等待当前请求退出…" : task.state.localizedTitle, color: .controlAccentColor), indicator,
-            NativeUI.label("本批 \(progress.total) 张 · 已分析 \(progress.analyzed) · 已分类 \(progress.classified) · 待分类 \(progress.needsReview) · 未分析 \(progress.remaining)"),
-            NativeUI.label("图片逐张串行发送到本机模型。分析只保存结果，不会改动相册。", size: 12, color: .secondaryLabelColor),
-            NativeUI.stack([start, pause], horizontal: true)
-        ], spacing: 20)
-        content.edgeInsets = NSEdgeInsets(top: 28, left: 24, bottom: 24, right: 24)
-        let controller = NSViewController()
-        controller.view = NativeUI.scroll(content)
-        embed(controller, taskID: task.id)
+        let controller: PhotoProgressViewController
+        if let current = detailController as? PhotoProgressViewController, shownTaskID == task.id { controller = current }
+        else {
+            controller = PhotoProgressViewController { [weak self] action in
+                switch action {
+                case .pause: self?.coordinator.pause(taskID: task.id)
+                case .startOrContinue: self?.coordinator.startOrContinue(taskID: task.id)
+                }
+            }
+            embed(controller, taskID: task.id)
+        }
+        controller.update(task: task, isPausing: isPausing, canStartOrContinue: coordinator.canChangeEnvironment)
     }
 
     private func showReview(_ task: PhotoClassificationTask) {
@@ -244,10 +252,10 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
     private func deleteSelectedTask() {
         guard let task = coordinator.selectedTask, coordinator.canDeleteTask(id: task.id), let window else { return }
         let alert = NSAlert()
-        alert.messageText = "删除任务？"
-        alert.informativeText = task.state == .applied ? "将失去本次整理的撤销记录，不会修改 Photos。" : "删除进度和分类结果，不会修改 Photos。"
+        alert.messageText = "移除这批记录？"
+        alert.informativeText = task.state == .applied ? "将失去本次整理的撤销记录，已有相册和照片保持不变。" : "将删除这批进度和分类结果，照片可能再次被选入新批次。不会修改 Photos。"
         alert.addButton(withTitle: "取消")
-        alert.addButton(withTitle: "删除任务")
+        alert.addButton(withTitle: "移除记录")
         alert.beginSheetModal(for: window) { [weak self] response in
             if response == .alertSecondButtonReturn { self?.coordinator.deleteTask(id: task.id) }
         }
@@ -255,11 +263,15 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
 
     func numberOfRows(in tableView: NSTableView) -> Int { coordinator.tasks.count }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { GlimpseTaskRowView() }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let task = coordinator.tasks[row]
-        let title = NativeUI.label(task.title, weight: .medium)
+        let title = NativeUI.label(task.title, weight: .medium, color: NativeUI.ink)
         title.maximumNumberOfLines = 1
-        let status = NativeUI.label("\(task.progress.analyzed)/\(task.progress.total) · \(task.state.localizedTitle)", size: 11, color: .secondaryLabelColor)
+        let isPausing = task.state == .paused && coordinator.activeTaskID == task.id
+        let stateTitle = isPausing ? "正在暂停" : task.state.localizedTitle
+        let status = NativeUI.label("\(task.progress.analyzed)/\(task.progress.total) · \(stateTitle)", size: 12, color: NativeUI.muted)
         let cell = NSTableCellView()
         NativeUI.pin(NativeUI.stack([title, status], spacing: 4), to: cell, inset: 8)
         return cell
@@ -269,5 +281,14 @@ final class GlimpseMainWindowController: NSWindowController, NSTableViewDataSour
         guard !rendering, coordinator.tasks.indices.contains(table.selectedRow) else { return }
         coordinator.isCreatingTask = false
         coordinator.selectedTaskID = coordinator.tasks[table.selectedRow].id
+    }
+}
+
+@MainActor
+private final class GlimpseTaskRowView: NSTableRowView {
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+    override func drawSelection(in dirtyRect: NSRect) {
+        NativeUI.accent.withAlphaComponent(0.12).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 4), xRadius: 8, yRadius: 8).fill()
     }
 }

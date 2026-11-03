@@ -9,9 +9,9 @@ Verify the ZIP against SHA256SUMS, extract it, and move GlimpseMac.app to your p
 1. Start LM Studio's local server and load your downloaded vision model.
 2. Refresh the model status in Glimpse. Downloaded models without a loaded instance are not ready for classification.
 3. Choose the next whole-library batch, an album or a date range. Start with 10 photos; larger batches can contain 50 or 100.
-4. Create the task, then start classification. Pause or continue the fixed batch as needed.
-5. Review photo categories and the per-photo album-write checkboxes. Explicitly choosing an unclassified result removes its write approval.
-6. Review the target albums and the confirmation sheet, then confirm writing. Analysis alone does not modify albums.
+4. Click “开始分类 N 张” to fix the batch and start classification in one action. Pause or continue that same batch as needed.
+5. Check categories and “加入相册” checkboxes. “批量勾选与改类” can approve or clear the current filter; changing a photo to unclassified removes its approval.
+6. Use “选择目标相册” to check destinations, then “预览加入相册…” to see actual album names and counts. Only the final “加入 N 张照片” confirmation writes. Cancel writes nothing; analysis alone does not modify albums.
 
 The suggested-deletion album contains candidates for human review; the App never deletes photos. Undo removes only album memberships recorded as newly added by this task. Interrupted writes or undo operations require inspection in Photos, after which the task can only be closed, not automatically retried.
 

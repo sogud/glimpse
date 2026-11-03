@@ -92,7 +92,7 @@ private final class GlimpseApplicationDelegate: NSObject, NSApplicationDelegate,
         menu.addItem(appItem)
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "文件")
-        let new = fileMenu.addItem(withTitle: "新建分类任务", action: #selector(newTask), keyEquivalent: "n")
+        let new = fileMenu.addItem(withTitle: "开始新的一批", action: #selector(newTask), keyEquivalent: "n")
         new.target = self
         let refresh = fileMenu.addItem(withTitle: "刷新照片和模型状态", action: #selector(refreshEnvironment), keyEquivalent: "r")
         refresh.target = self

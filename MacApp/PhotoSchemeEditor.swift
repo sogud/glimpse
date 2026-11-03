@@ -35,8 +35,8 @@ final class PhotoSchemeEditorWindowController: NSWindowController, NSTableViewDa
         scroll.hasVerticalScroller = true
         scroll.documentView = table
         let add = NativeButton("新增分类") { [weak self] in
-            guard let self, coordinator.canChangeEnvironment else { return }
-            coordinator.addSavedCategory(schemeKind: kind)
+            guard let self, self.coordinator.canChangeEnvironment else { return }
+            self.coordinator.addSavedCategory(schemeKind: self.kind)
         }
         let remove = NativeButton("删除选中分类") { [weak self] in self?.deleteCategory() }
         let content = NativeUI.stack([
